@@ -80,7 +80,18 @@ class BaseScraper(ABC):
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
                 headless=True,
-                args=['--disable-blink-features=AutomationControlled']
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-infobars',
+                    '--window-position=0,0',
+                    '--ignore-certifcate-errors',
+                    '--ignore-certifcate-errors-spki-list',
+                    '--disable-accelerated-2d-canvas',
+                    '--disable-gpu',
+                ]
             )
             logger.debug(f"Browser started for {self.site.name}")
         return self._browser
@@ -104,13 +115,47 @@ class BaseScraper(ABC):
         context = await browser.new_context(
             user_agent=self.user_agent,
             viewport={'width': 1920, 'height': 1080},
-            locale='nl-NL'
+            locale='nl-NL',
+            java_script_enabled=True,
+            bypass_csp=True,
+            extra_http_headers={
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
         )
         page = await context.new_page()
 
-        # Add anti-detection scripts
+        # Add comprehensive anti-detection scripts
         await page.add_init_script("""
+            // Override webdriver
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+            // Override plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+
+            // Override languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['nl-NL', 'nl', 'en-US', 'en']
+            });
+
+            // Override permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+
+            // Override chrome
+            window.chrome = {
+                runtime: {}
+            };
         """)
 
         return page
@@ -131,31 +176,112 @@ class BaseScraper(ABC):
             response.raise_for_status()
             return response.text
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
-    async def _fetch_with_browser(self, url: str, wait_selector: str = None) -> str:
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
+    async def _fetch_with_browser(self, url: str, wait_selector: str = None, scroll: bool = True) -> str:
         """Fetch page content using Playwright browser.
 
         Args:
             url: URL to fetch
             wait_selector: Optional CSS selector to wait for
+            scroll: Whether to scroll the page to load lazy content
 
         Returns:
             HTML content as string
         """
         page = await self._get_page()
         try:
-            await page.goto(url, wait_until='networkidle', timeout=self.timeout * 1000)
+            # Navigate with longer timeout and domcontentloaded first
+            logger.debug(f"Navigating to {url}")
+            await page.goto(url, wait_until='domcontentloaded', timeout=60000)
 
+            # Wait for page to stabilize
+            await asyncio.sleep(3)
+
+            # Handle cookie consent dialogs
+            await self._handle_cookie_consent(page)
+
+            # Wait for additional network requests
+            try:
+                await page.wait_for_load_state('networkidle', timeout=30000)
+            except Exception:
+                logger.debug("Network didn't fully idle, continuing...")
+
+            # Scroll to load lazy content
+            if scroll:
+                await self._scroll_page(page)
+
+            # Wait for specific selector if provided
             if wait_selector:
-                await page.wait_for_selector(wait_selector, timeout=10000)
+                try:
+                    # Try multiple selectors separated by comma
+                    selectors = [s.strip() for s in wait_selector.split(',')]
+                    for selector in selectors:
+                        try:
+                            await page.wait_for_selector(selector, timeout=5000)
+                            logger.debug(f"Found selector: {selector}")
+                            break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logger.debug(f"Selector wait timeout: {e}")
 
-            # Wait a bit for dynamic content
+            # Final wait for dynamic content
             await asyncio.sleep(2)
 
             content = await page.content()
+            logger.debug(f"Got {len(content)} bytes of content")
             return content
         finally:
             await page.close()
+
+    async def _handle_cookie_consent(self, page: Page):
+        """Handle common cookie consent dialogs."""
+        cookie_selectors = [
+            'button[id*="accept"]',
+            'button[class*="accept"]',
+            '[data-testid="cookie-accept"]',
+            '#onetrust-accept-btn-handler',
+            '.cookie-accept',
+            'button:has-text("Accepteren")',
+            'button:has-text("Akkoord")',
+            'button:has-text("Accept")',
+            'button:has-text("OK")',
+        ]
+        for selector in cookie_selectors:
+            try:
+                button = await page.wait_for_selector(selector, timeout=2000)
+                if button:
+                    await button.click()
+                    logger.debug(f"Clicked cookie consent: {selector}")
+                    await asyncio.sleep(1)
+                    break
+            except Exception:
+                continue
+
+    async def _scroll_page(self, page: Page):
+        """Scroll page to trigger lazy loading."""
+        try:
+            await page.evaluate("""
+                async () => {
+                    await new Promise((resolve) => {
+                        let totalHeight = 0;
+                        const distance = 300;
+                        const timer = setInterval(() => {
+                            const scrollHeight = document.body.scrollHeight;
+                            window.scrollBy(0, distance);
+                            totalHeight += distance;
+                            if (totalHeight >= scrollHeight || totalHeight > 5000) {
+                                clearInterval(timer);
+                                window.scrollTo(0, 0);
+                                resolve();
+                            }
+                        }, 100);
+                    });
+                }
+            """)
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.debug(f"Scroll failed: {e}")
 
     def _parse_price(self, price_str: str) -> Optional[float]:
         """Parse price string to float.

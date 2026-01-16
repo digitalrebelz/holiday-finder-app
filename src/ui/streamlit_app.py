@@ -3,9 +3,9 @@
 import asyncio
 from datetime import date, timedelta
 from typing import List, Dict, Any
+import random
 
 import streamlit as st
-import pandas as pd
 from loguru import logger
 
 # Configure page before any other Streamlit calls
@@ -18,11 +18,6 @@ st.set_page_config(
 from src.database.db_manager import db_manager
 from src.database import crud
 from src.database.models import SearchQuery, TravelResult, Review, AnalysisResult
-from src.scrapers.tui_scraper import TUIScraper
-from src.scrapers.booking_scraper import BookingScraper
-from src.scrapers.camping_scraper import ACSIScraper
-from src.review_scrapers.zoover_scraper import ZooverScraper
-from src.analyzers.ranking_engine import RankingEngine
 
 
 def init_session_state():
@@ -35,10 +30,244 @@ def init_session_state():
         st.session_state.is_searching = False
     if 'search_query_id' not in st.session_state:
         st.session_state.search_query_id = None
+    if 'scraper_status' not in st.session_state:
+        st.session_state.scraper_status = {}
 
 
-async def run_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Run search across all scrapers.
+def generate_demo_results(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate demo results for testing the UI.
+
+    Args:
+        query_params: Search parameters
+
+    Returns:
+        List of demo travel results
+    """
+    # Sample accommodations for demo
+    demo_accommodations = [
+        {
+            "name": "Camping La Sirene",
+            "destination": "Costa Brava",
+            "country": "Spain",
+            "type": "camping",
+            "base_price": 2899,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "TUI"
+        },
+        {
+            "name": "Camping Le Sérignan Plage",
+            "destination": "Languedoc",
+            "country": "France",
+            "type": "camping",
+            "base_price": 3199,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "Vacansoleil"
+        },
+        {
+            "name": "Camping Cypsela Resort",
+            "destination": "Costa Brava",
+            "country": "Spain",
+            "type": "camping",
+            "base_price": 2599,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "ACSI"
+        },
+        {
+            "name": "Camping Baia Verde",
+            "destination": "Toscane",
+            "country": "Italy",
+            "type": "camping",
+            "base_price": 2799,
+            "has_pool": True,
+            "has_slides": False,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "Eurocamp"
+        },
+        {
+            "name": "Camping Park Albatros",
+            "destination": "Toscane",
+            "country": "Italy",
+            "type": "camping",
+            "base_price": 3399,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "TUI"
+        },
+        {
+            "name": "Camping Bella Italia",
+            "destination": "Gardameer",
+            "country": "Italy",
+            "type": "camping",
+            "base_price": 2999,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "Vacansoleil"
+        },
+        {
+            "name": "Camping El Delfin Verde",
+            "destination": "Costa Brava",
+            "country": "Spain",
+            "type": "camping",
+            "base_price": 2699,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "Sunweb"
+        },
+        {
+            "name": "Camping Les Méditerranées",
+            "destination": "Languedoc",
+            "country": "France",
+            "type": "camping",
+            "base_price": 3599,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "TUI"
+        },
+        {
+            "name": "Camping Norcenni Girasole",
+            "destination": "Toscane",
+            "country": "Italy",
+            "type": "camping",
+            "base_price": 2499,
+            "has_pool": True,
+            "has_slides": False,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "ACSI"
+        },
+        {
+            "name": "Camping Sandaya Riviera d'Azur",
+            "destination": "Côte d'Azur",
+            "country": "France",
+            "type": "camping",
+            "base_price": 3899,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "Eurocamp"
+        },
+        {
+            "name": "Camping Playa Montroig",
+            "destination": "Costa Dorada",
+            "country": "Spain",
+            "type": "camping",
+            "base_price": 2399,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "Allcamps"
+        },
+        {
+            "name": "Camping Lanterna Premium",
+            "destination": "Istrië",
+            "country": "Croatia",
+            "type": "camping",
+            "base_price": 2199,
+            "has_pool": True,
+            "has_slides": True,
+            "has_kids_club": True,
+            "all_inclusive": False,
+            "source": "ACSI"
+        },
+    ]
+
+    results = []
+    budget = query_params['budget']
+
+    for i, acc in enumerate(demo_accommodations):
+        # Add some price variation
+        price_variation = random.randint(-200, 400)
+        price = acc['base_price'] + price_variation
+
+        # Skip if over budget
+        if price > budget * 1.1:
+            continue
+
+        # Calculate score based on preferences
+        score = 50
+        prefs = query_params.get('preferences', {})
+
+        if price <= budget:
+            score += 15
+        if acc['has_pool'] and prefs.get('pool'):
+            score += 15
+        if acc['has_slides'] and prefs.get('water_slides'):
+            score += 15
+        if acc['has_kids_club'] and prefs.get('kids_club'):
+            score += 10
+        if acc['all_inclusive'] and prefs.get('all_inclusive'):
+            score += 10
+
+        # Add some randomness
+        score += random.randint(-5, 10)
+        score = min(98, max(40, score))
+
+        departure_date = query_params['date_from']
+        duration = query_params['duration_min']
+
+        result = {
+            'accommodation_name': acc['name'],
+            'destination': acc['destination'],
+            'country': acc['country'],
+            'accommodation_type': acc['type'],
+            'price_total': price,
+            'price_per_person': price / (query_params['adults'] + query_params['children']),
+            'departure_date': str(departure_date),
+            'return_date': str(departure_date + timedelta(days=duration)),
+            'duration_nights': duration,
+            'departure_airport': query_params['airports'][0] if query_params['airports'] else 'EIN',
+            'flight_included': True,
+            'has_pool': acc['has_pool'],
+            'has_water_slides': acc['has_slides'],
+            'has_kids_club': acc['has_kids_club'],
+            'all_inclusive': acc['all_inclusive'],
+            'overall_score': score,
+            'source_website': acc['source'],
+            'url': f"https://www.{acc['source'].lower()}.nl/search/{acc['name'].lower().replace(' ', '-')}",
+            'llm_summary': f"Populaire familiecamping in {acc['destination']} met uitstekende faciliteiten. "
+                          f"{'Groot aquapark met glijbanen. ' if acc['has_slides'] else ''}"
+                          f"{'Actieve kinderanimatie aanwezig. ' if acc['has_kids_club'] else ''}"
+                          f"Goede reviews van Nederlandse gezinnen.",
+            'pros': [
+                f"Uitstekende locatie in {acc['destination']}",
+                "Groot zwembadcomplex" if acc['has_pool'] else "Rustige omgeving",
+                "Goed voor gezinnen met kinderen" if acc['has_kids_club'] else "Veel privacy",
+            ],
+            'cons': [
+                "Kan druk zijn in hoogseizoen",
+                "Reserveer vroeg voor beste plekken"
+            ]
+        }
+        results.append(result)
+
+    # Sort by score
+    results.sort(key=lambda x: x['overall_score'], reverse=True)
+
+    return results[:10]
+
+
+async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Run actual search across all scrapers.
 
     Args:
         query_params: Search parameters
@@ -46,13 +275,16 @@ async def run_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     Returns:
         List of all results
     """
+    # Import scrapers only when needed
+    from src.scrapers.camping_scraper import ACSIScraper
+    from src.scrapers.corendon_scraper import CorendonScraper
+
     all_results = []
 
-    # Initialize scrapers
+    # Use working scrapers
     scrapers = [
-        TUIScraper(),
-        BookingScraper(),
-        ACSIScraper(),
+        CorendonScraper(),  # Package holidays with flights
+        ACSIScraper(),  # ANWB camping
     ]
 
     # Create search query object
@@ -103,9 +335,13 @@ async def run_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
                 results = await scraper.search(temp_query)
                 all_results.extend(results)
                 logger.info(f"Got {len(results)} results from {scraper.site.name}")
+                if results:
+                    status_text.text(f"✓ {scraper.site.name}: {len(results)} resultaten")
+                else:
+                    status_text.text(f"⚠ {scraper.site.name}: geen resultaten")
         except Exception as e:
             logger.error(f"Scraper {scraper.site.name} failed: {e}")
-            st.warning(f"Kon niet zoeken op {scraper.site.name}")
+            status_text.text(f"✗ {scraper.site.name}: fout ({str(e)[:50]})")
 
         progress_bar.progress((i + 1) / len(scrapers))
 
@@ -124,6 +360,76 @@ async def run_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     return all_results
 
 
+async def fetch_reviews_for_results(
+    results: List[Dict[str, Any]],
+    max_results: int = 5,
+    children_ages: List[int] = None
+) -> List[Dict[str, Any]]:
+    """Fetch Google reviews for top results and analyze child-friendliness.
+
+    Args:
+        results: List of travel results
+        max_results: Maximum number of results to fetch reviews for
+        children_ages: Ages of children for targeted analysis
+
+    Returns:
+        Updated results with review data
+    """
+    from src.scrapers.google_reviews_scraper import GoogleReviewsScraper
+
+    scraper = GoogleReviewsScraper()
+
+    # Determine target age range for analysis
+    if children_ages:
+        older_kids = [age for age in children_ages if age >= 8]
+        if older_kids:
+            target_min = min(older_kids)
+            target_max = max(older_kids)
+        else:
+            target_min, target_max = 8, 13
+    else:
+        target_min, target_max = 8, 13
+
+    # Only fetch reviews for top results (to save time)
+    for i, result in enumerate(results[:max_results]):
+        try:
+            name = result.get('accommodation_name', '')
+            location = f"{result.get('destination', '')} {result.get('country', '')}"
+
+            logger.info(f"Fetching reviews for: {name}")
+
+            # Get reviews from Google
+            review_data = await scraper.get_reviews(
+                accommodation_name=name,
+                location=location,
+                max_reviews=15
+            )
+
+            # Store Google rating
+            if review_data.get('rating'):
+                result['google_rating'] = review_data['rating']
+                result['google_review_count'] = review_data.get('review_count', 0)
+
+            # Analyze child-friendliness if we have reviews
+            if review_data.get('reviews'):
+                analysis = await scraper.analyze_child_friendliness(
+                    review_data['reviews'],
+                    target_age_min=target_min,
+                    target_age_max=target_max
+                )
+                result['child_friendliness_score'] = analysis.get('score')
+                result['child_friendliness_summary'] = analysis.get('summary')
+                result['child_relevant_reviews'] = analysis.get('relevant_reviews', [])
+                result['positive_child_mentions'] = analysis.get('positive_mentions', 0)
+                result['negative_child_mentions'] = analysis.get('negative_mentions', 0)
+
+        except Exception as e:
+            logger.error(f"Failed to fetch reviews for {result.get('accommodation_name')}: {e}")
+            continue
+
+    return results
+
+
 def display_search_form():
     """Display the search form in the sidebar."""
     st.sidebar.header("Zoek Criteria")
@@ -140,7 +446,8 @@ def display_search_form():
         for i in range(children):
             col_idx = i % 4
             with cols[col_idx]:
-                age = st.number_input(f"Kind {i+1}", min_value=0, max_value=17, value=5, key=f"child_age_{i}")
+                default_age = [1, 13, 5, 8][i] if i < 4 else 5
+                age = st.number_input(f"Kind {i+1}", min_value=0, max_value=17, value=default_age, key=f"child_age_{i}")
                 children_ages.append(age)
 
     # Dates
@@ -199,7 +506,7 @@ def display_search_form():
     # Preferences
     st.sidebar.subheader("Voorkeuren")
     accommodation_types = ["Geen voorkeur", "Camping", "Hotel", "Resort", "Appartement"]
-    accommodation = st.sidebar.selectbox("Accommodatie type", accommodation_types)
+    accommodation = st.sidebar.selectbox("Accommodatie type", accommodation_types, index=1)
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
@@ -239,29 +546,53 @@ def display_search_form():
 def display_results(results: List[Dict[str, Any]]):
     """Display search results."""
     if not results:
-        st.info("Geen resultaten gevonden. Probeer andere zoekfilters.")
+        st.warning("Geen resultaten gevonden. Probeer andere zoekfilters of probeer het later opnieuw.")
         return
 
-    st.header(f"Top {len(results)} Vakanties")
+    st.header(f"🏆 Top {len(results)} Vakanties")
 
     for i, result in enumerate(results, 1):
+        score = result.get('overall_score', 0)
+        score_color = "🟢" if score >= 80 else "🟡" if score >= 60 else "🔴"
+
+        # Add child-friendliness indicator to title if available
+        child_score = result.get('child_friendliness_score')
+        child_indicator = ""
+        if child_score is not None:
+            if child_score >= 70:
+                child_indicator = " 👨‍👩‍👧‍👦"
+            elif child_score >= 50:
+                child_indicator = " 👨‍👩‍👧"
+
         with st.expander(
             f"**{i}. {result.get('accommodation_name', 'Unknown')}** - "
-            f"€{result.get('price_total', 0):,.0f}".replace(',', '.'),
+            f"€{result.get('price_total', 0):,.0f}".replace(',', '.') + f" {score_color} {score:.0f}/100{child_indicator}",
             expanded=(i <= 3)
         ):
             col1, col2, col3 = st.columns([2, 2, 1])
 
             with col1:
-                st.write(f"**Bestemming:** {result.get('destination', 'Unknown')}, {result.get('country', '')}")
-                st.write(f"**Type:** {result.get('accommodation_type', 'Unknown')}")
-                st.write(f"**Vertrek:** {result.get('departure_date', '')}")
-                st.write(f"**Duur:** {result.get('duration_nights', '?')} nachten")
+                st.write(f"**📍 Bestemming:** {result.get('destination', 'Unknown')}, {result.get('country', '')}")
+                st.write(f"**🏕️ Type:** {result.get('accommodation_type', 'Unknown')}")
+                st.write(f"**📅 Vertrek:** {result.get('departure_date', '')}")
+                st.write(f"**⏱️ Duur:** {result.get('duration_nights', '?')} nachten")
+                st.write(f"**✈️ Luchthaven:** {result.get('departure_airport', 'N/A')}")
+                st.write(f"**🔗 Bron:** {result.get('source_website', 'Unknown')}")
+
+                # Google rating if available
+                if result.get('google_rating'):
+                    google_stars = "⭐" * int(result['google_rating'])
+                    review_count = result.get('google_review_count', 0)
+                    st.write(f"**⭐ Google:** {result['google_rating']:.1f}/5 ({review_count} reviews)")
 
             with col2:
-                # Score if available
-                if 'overall_score' in result:
-                    st.metric("Score", f"{result['overall_score']:.0f}/100")
+                # Score
+                st.metric("Match Score", f"{score:.0f}/100")
+
+                # Child-friendliness score
+                if child_score is not None:
+                    child_color = "🟢" if child_score >= 70 else "🟡" if child_score >= 50 else "🔴"
+                    st.metric("Kindvriendelijk", f"{child_color} {child_score}/100")
 
                 # Facilities
                 facilities = []
@@ -282,26 +613,62 @@ def display_results(results: List[Dict[str, Any]]):
 
             with col3:
                 st.write(f"**Prijs totaal:**")
-                st.write(f"# €{result.get('price_total', 0):,.0f}".replace(',', '.'))
+                st.markdown(f"### €{result.get('price_total', 0):,.0f}".replace(',', '.'))
+
+                pp_price = result.get('price_per_person', 0)
+                if pp_price:
+                    st.write(f"€{pp_price:,.0f} p.p.".replace(',', '.'))
 
                 if result.get('url'):
                     st.link_button("Bekijk →", result['url'])
 
-            # Analysis details if available
+            # Child-friendliness analysis
+            if result.get('child_friendliness_summary'):
+                st.write("---")
+                st.write("**👨‍👩‍👧‍👦 Kindvriendelijkheid (Google Reviews):**")
+
+                summary = result['child_friendliness_summary']
+                pos_mentions = result.get('positive_child_mentions', 0)
+                neg_mentions = result.get('negative_child_mentions', 0)
+
+                if child_score and child_score >= 70:
+                    st.success(f"{summary}")
+                elif child_score and child_score >= 50:
+                    st.info(f"{summary}")
+                elif child_score:
+                    st.warning(f"{summary}")
+                else:
+                    st.info(f"{summary}")
+
+                # Show relevant review snippets
+                relevant_reviews = result.get('child_relevant_reviews', [])
+                if relevant_reviews:
+                    with st.expander(f"📝 {len(relevant_reviews)} relevante reviews", expanded=False):
+                        for rev in relevant_reviews[:3]:
+                            sentiment_icon = "👍" if rev.get('sentiment') == 'positive' else "👎" if rev.get('sentiment') == 'negative' else "➖"
+                            st.write(f"{sentiment_icon} *\"{rev.get('text', '')[:200]}...\"*")
+                            if rev.get('keywords_found'):
+                                st.caption(f"Keywords: {', '.join(rev['keywords_found'][:5])}")
+
+            # Analysis details
             if result.get('llm_summary'):
                 st.write("---")
-                st.write("**Analyse:**")
-                st.write(result['llm_summary'])
+                st.write("**💬 Samenvatting:**")
+                st.info(result['llm_summary'])
 
-            if result.get('pros'):
-                st.write("**Voordelen:**")
-                for pro in result['pros'][:3]:
-                    st.write(f"✅ {pro}")
+            col_pros, col_cons = st.columns(2)
 
-            if result.get('cons'):
-                st.write("**Aandachtspunten:**")
-                for con in result['cons'][:2]:
-                    st.write(f"⚠️ {con}")
+            with col_pros:
+                if result.get('pros'):
+                    st.write("**👍 Voordelen:**")
+                    for pro in result['pros'][:3]:
+                        st.write(f"✅ {pro}")
+
+            with col_cons:
+                if result.get('cons'):
+                    st.write("**⚠️ Aandachtspunten:**")
+                    for con in result['cons'][:2]:
+                        st.write(f"⚠️ {con}")
 
 
 def main():
@@ -322,39 +689,94 @@ def main():
     if query_params:
         st.session_state.is_searching = True
 
+        # Live scraping
         with st.spinner("Zoeken naar vakanties..."):
-            # Run async search
-            results = asyncio.run(run_search(query_params))
+            st.info("🔍 Bezig met zoeken op Corendon (pakketreizen) en ANWB (campings). Dit kan 2-3 minuten duren.")
+            results = asyncio.run(run_live_search(query_params))
             st.session_state.search_results = results
 
             if results:
-                # Rank results
-                st.info("Analyseren en rangschikken van resultaten...")
+                # Rank results using the ranking engine
+                from src.analyzers.requirement_matcher import RequirementMatcher
+                from src.analyzers.ranking_engine import RankingEngine
 
+                matcher = RequirementMatcher()
+                engine = RankingEngine(use_llm=False)
+
+                # Create temp query for matching
+                temp_query = SearchQuery(
+                    travelers_adults=query_params['adults'],
+                    travelers_children=query_params['children'],
+                    children_ages=query_params.get('children_ages'),
+                    departure_date_from=query_params['date_from'],
+                    departure_date_to=query_params['date_to'],
+                    duration_min=query_params['duration_min'],
+                    duration_max=query_params['duration_max'],
+                    budget_max=query_params['budget'],
+                    departure_airports=query_params['airports'],
+                    preferences=query_params.get('preferences'),
+                    accommodation_type=query_params.get('accommodation_type'),
+                )
+
+                # Score results
+                for result in results:
+                    # Create TravelResult object for scoring
+                    travel_result = TravelResult(
+                        source_website=result.get('source_website', 'Unknown'),
+                        destination=result.get('destination', 'Unknown'),
+                        accommodation_name=result.get('accommodation_name', 'Unknown'),
+                        accommodation_type=result.get('accommodation_type', 'hotel'),
+                        price_total=result.get('price_total', 0),
+                        departure_date=query_params['date_from'],
+                        return_date=result.get('return_date', query_params['date_from']),
+                        duration_nights=result.get('duration_nights', query_params['duration_min']),
+                        departure_airport=result.get('departure_airport'),
+                        has_pool=result.get('has_pool', False),
+                        has_water_slides=result.get('has_water_slides', False),
+                        has_kids_club=result.get('has_kids_club', False),
+                        url=result.get('url', ''),
+                    )
+
+                    # Calculate match score
+                    match_score = matcher.match_score(travel_result, temp_query)
+                    result['overall_score'] = match_score
+
+                    # Add default analysis
+                    result['llm_summary'] = f"Gevonden op {result.get('source_website', 'onbekend')}. " \
+                                           f"Prijs: €{result.get('price_total', 0):,.0f} voor {result.get('duration_nights', '?')} nachten."
+                    result['pros'] = []
+                    result['cons'] = []
+
+                    if result.get('has_pool'):
+                        result['pros'].append("Zwembad aanwezig")
+                    if result.get('has_water_slides'):
+                        result['pros'].append("Glijbanen beschikbaar")
+                    if result.get('has_kids_club'):
+                        result['pros'].append("Kinderanimatie/club")
+                    if result.get('price_total', float('inf')) <= query_params['budget']:
+                        result['pros'].append("Binnen budget")
+                    else:
+                        result['cons'].append("Boven budget")
+
+                # Sort by score
+                results.sort(key=lambda x: x.get('overall_score', 0), reverse=True)
+
+                # Fetch Google reviews for top results
+                st.info("📝 Ophalen van Google Reviews en analyseren kindvriendelijkheid...")
                 try:
-                    ranking_engine = RankingEngine(use_llm=False)  # Start without LLM for speed
-
-                    # Simple ranking based on available data
-                    for result in results:
-                        # Calculate a basic score
-                        score = 50
-                        if result.get('price_total', float('inf')) <= query_params['budget']:
-                            score += 20
-                        if result.get('has_pool'):
-                            score += 10
-                        if result.get('has_water_slides'):
-                            score += 10
-                        if result.get('has_kids_club'):
-                            score += 10
-                        result['overall_score'] = min(100, score)
-
-                    # Sort by score
-                    results.sort(key=lambda x: x.get('overall_score', 0), reverse=True)
-                    st.session_state.ranked_results = results[:10]
-
+                    results = asyncio.run(fetch_reviews_for_results(
+                        results[:10],
+                        max_results=5,  # Fetch reviews for top 5 to save time
+                        children_ages=query_params.get('children_ages')
+                    ))
                 except Exception as e:
-                    logger.error(f"Ranking failed: {e}")
-                    st.session_state.ranked_results = results[:10]
+                    logger.error(f"Failed to fetch reviews: {e}")
+                    st.warning("Reviews konden niet worden opgehaald, resultaten worden toch getoond.")
+
+                st.session_state.ranked_results = results[:10]
+                st.success(f"✓ {len(results)} resultaten gevonden van live reissites!")
+            else:
+                st.warning("Geen resultaten gevonden. De reissites kunnen tijdelijk onbereikbaar zijn of beveiligingsmaatregelen toepassen. Probeer het later opnieuw of pas de zoekfilters aan.")
 
         st.session_state.is_searching = False
 
@@ -371,18 +793,26 @@ def main():
         Gebruik het zoekformulier aan de linkerkant om de perfecte vakantie te vinden voor jouw gezin.
 
         **Hoe het werkt:**
-        1. Vul je reisgezelschap in (volwassenen en kinderen)
+        1. Vul je reisgezelschap in (volwassenen en kinderen met leeftijden)
         2. Selecteer je gewenste reisdatum en duur
         3. Stel je budget in
         4. Kies je voorkeuren (zwembad, glijbanen, etc.)
         5. Klik op "Zoek Vakanties"
 
-        De app doorzoekt meerdere reissites en geeft je de top 10 beste matches!
+        **Wat de app doet:**
+        - Doorzoekt Corendon (pakketreizen met vlucht) en ANWB (campings)
+        - Haalt Google Reviews op voor de top resultaten
+        - Analyseert reviews op kindvriendelijkheid (gebaseerd op leeftijden kinderen)
+        - Geeft je de top 10 beste matches met scores!
+
+        ---
+
+        **⚠️ Let op:** Het zoeken kan enkele minuten duren omdat we live resultaten én reviews ophalen.
         """)
 
         # Show example search parameters
         st.info("""
-        **Voorbeeld zoekopdracht:**
+        **Standaard zoekopdracht:**
         - 2 volwassenen + 2 kinderen (1 en 13 jaar)
         - 13 juli - 2 augustus 2026
         - 10-14 dagen
