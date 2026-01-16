@@ -161,8 +161,9 @@ class TestACSIScraper:
         url = scraper._build_search_url(sample_query)
 
         assert 'eurocampings' in url
-        assert 'adults=2' in url
-        assert 'children=2' in url
+        # Uses Dutch parameter names
+        assert 'volwassenen=2' in url
+        assert 'kinderen=2' in url
 
     def test_extract_country_from_location(self, scraper):
         """Test country extraction from location."""
