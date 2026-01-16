@@ -117,8 +117,8 @@ class TestFullSearchFlow:
         assert all(0 <= s[1] <= 100 for s in scores)
 
         # Results with pool should score higher
-        pool_scores = [s[1] for r, s in scores if r.has_pool]
-        no_pool_scores = [s[1] for r, s in scores if not r.has_pool]
+        pool_scores = [s for r, s in scores if r.has_pool]
+        no_pool_scores = [s for r, s in scores if not r.has_pool]
         if pool_scores and no_pool_scores:
             assert sum(pool_scores) / len(pool_scores) >= sum(no_pool_scores) / len(no_pool_scores)
 

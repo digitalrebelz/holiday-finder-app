@@ -169,7 +169,7 @@ class TestACSIScraper:
         assert scraper._extract_country_from_location('Ardeche, Frankrijk') == 'France'
         assert scraper._extract_country_from_location('Costa Brava, Spanje') == 'Spain'
         assert scraper._extract_country_from_location('Toscane, Italy') == 'Italy'
-        assert scraper._extract_country_from_location('Kroatie') == 'Croatia'
+        assert scraper._extract_country_from_location('Kroatië') == 'Croatia'
 
 
 # Integration tests for scrapers would require mocking or actual network calls
