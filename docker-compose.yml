@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: holiday-finder-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - '11434:11434'
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  holiday-finder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: holiday-finder-app
+    depends_on:
+      - ollama
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    ports:
+      - '8501:8501'
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - DATABASE_URL=sqlite:///./data/holiday_finder.db
+    restart: unless-stopped
+    command: streamlit run src/ui/streamlit_app.py --server.port=8501 --server.address=0.0.0.0
+
+volumes:
+  ollama_data:
