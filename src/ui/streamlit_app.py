@@ -496,6 +496,34 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     progress_bar.empty()
     status_text.empty()
 
+    # Filter by selected destinations if specified
+    selected_destinations = query_params.get('destinations')
+    if selected_destinations:
+        destination_map = {
+            'spain': ['spain', 'spanje', 'mallorca', 'costa brava', 'costa dorada', 'balearen', 'canarias', 'tenerife'],
+            'france': ['france', 'frankrijk', 'côte d\'azur', 'provence', 'languedoc', 'ardèche', 'bretagne', 'normandie'],
+            'italy': ['italy', 'italië', 'italie', 'toscane', 'tuscany', 'gardameer', 'rome', 'sicilië'],
+            'croatia': ['croatia', 'kroatië', 'kroatie', 'istrië', 'dalmatië', 'dubrovnik', 'split'],
+            'greece': ['greece', 'griekenland', 'kreta', 'rhodos', 'corfu', 'zakynthos', 'kos'],
+            'turkey': ['turkey', 'turkije', 'antalya', 'bodrum', 'alanya', 'side'],
+            'portugal': ['portugal', 'algarve', 'lissabon', 'porto', 'madeira'],
+            'egypt': ['egypt', 'egypte', 'hurghada', 'sharm el sheikh'],
+        }
+
+        allowed_destinations = set()
+        for dest in selected_destinations:
+            allowed_destinations.update(destination_map.get(dest, [dest]))
+
+        original_count = len(all_results)
+        all_results = [
+            r for r in all_results
+            if any(d in r.get('country', '').lower() or d in r.get('destination', '').lower()
+                   for d in allowed_destinations)
+        ]
+        filtered = original_count - len(all_results)
+        if filtered > 0:
+            logger.info(f"Filtered {filtered} results outside selected destinations")
+
     # Store results in database
     with db_manager.get_session() as session:
         for result_data in all_results:
@@ -662,6 +690,25 @@ def display_search_form():
     transport = st.sidebar.radio("Hoe wil je reizen?", transport_options, index=0)
     want_flight = transport == "Vliegtuig"
 
+    # Destinations
+    st.sidebar.subheader("Bestemmingen")
+    all_destinations = {
+        "Spanje": "spain",
+        "Frankrijk": "france",
+        "Italië": "italy",
+        "Kroatië": "croatia",
+        "Griekenland": "greece",
+        "Turkije": "turkey",
+        "Portugal": "portugal",
+        "Egypte": "egypt",
+    }
+    selected_destinations = st.sidebar.multiselect(
+        "Selecteer bestemmingen",
+        options=list(all_destinations.keys()),
+        default=["Spanje", "Frankrijk", "Italië", "Kroatië"]
+    )
+    destinations = [all_destinations[d] for d in selected_destinations]
+
     # Preferences
     st.sidebar.subheader("Voorkeuren")
     accommodation_types = ["Geen voorkeur", "Camping", "Hotel", "Resort", "Appartement"]
@@ -669,13 +716,21 @@ def display_search_form():
     default_acc_idx = 2 if want_flight else 1
     accommodation = st.sidebar.selectbox("Accommodatie type", accommodation_types, index=default_acc_idx)
 
+    # Check if kids club is relevant (only for children < 10)
+    kids_club_relevant = any(age < 10 for age in children_ages) if children_ages else True
+
     col1, col2 = st.sidebar.columns(2)
     with col1:
         all_inclusive = st.checkbox("All inclusive")
         swimming_pool = st.checkbox("Zwembad", value=True)
     with col2:
         water_slides = st.checkbox("Glijbanen", value=True)
-        kids_club = st.checkbox("Kinderanimatie", value=True)
+        if kids_club_relevant:
+            kids_club = st.checkbox("Kinderanimatie", value=True)
+        else:
+            kids_club = st.checkbox("Kinderanimatie", value=False, disabled=True,
+                                   help="Kinderanimatie is vooral voor kinderen t/m 10 jaar")
+            st.caption("(niet relevant voor 11+ jaar)")
 
     # Build preferences dict
     preferences = {
@@ -699,7 +754,8 @@ def display_search_form():
             'airports': airports if airports else ['EIN'],
             'preferences': preferences,
             'accommodation_type': accommodation if accommodation != "Geen voorkeur" else None,
-            'want_flight': want_flight
+            'want_flight': want_flight,
+            'destinations': destinations if destinations else None
         }
 
     return None
@@ -900,6 +956,28 @@ def main():
 
                 if not results:
                     st.warning("Geen resultaten na filtering. Probeer andere zoekopties.")
+                    st.session_state.is_searching = False
+                    return
+
+                # Filter by accommodation type if specified
+                accommodation_type = query_params.get('accommodation_type')
+                if accommodation_type:
+                    type_map = {
+                        'Camping': ['camping', 'mobile_home', 'chalet', 'safari_tent'],
+                        'Hotel': ['hotel'],
+                        'Resort': ['resort'],
+                        'Appartement': ['apartment', 'appartement'],
+                    }
+                    allowed_types = type_map.get(accommodation_type, [])
+                    if allowed_types:
+                        original_count = len(results)
+                        results = [r for r in results if r.get('accommodation_type', '').lower() in allowed_types]
+                        filtered_count = original_count - len(results)
+                        if filtered_count > 0:
+                            st.info(f"🏠 {filtered_count} andere accommodatietypes gefilterd (je zoekt {accommodation_type})")
+
+                if not results:
+                    st.warning(f"Geen {accommodation_type or 'accommodaties'} gevonden. Probeer andere zoekopties.")
                     st.session_state.is_searching = False
                     return
 

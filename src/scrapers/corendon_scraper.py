@@ -164,14 +164,21 @@ class CorendonScraper(BaseScraper):
                 except:
                     continue
 
-        # Price is usually per person, multiply for total
+        # Corendon shows price per person - calculate total
         total_persons = query.travelers_adults + query.travelers_children
-        if price and price < 500:  # Likely per person
-            price_total = price * total_persons
-            price_pp = price
-        elif price:
-            price_total = price
-            price_pp = price / total_persons
+
+        # Corendon prices are ALWAYS per person
+        # A price < €1500 for 7-14 nights is definitely per person
+        if price:
+            # Price per night per person check
+            price_per_night = price / max(query.duration_min, 7)
+            if price_per_night < 200:  # Less than €200/night/person = per person price
+                price_pp = price
+                price_total = price * total_persons
+            else:
+                # Already total price (rare)
+                price_total = price
+                price_pp = price / total_persons
         else:
             return None  # Skip if no price
 
