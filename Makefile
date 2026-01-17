@@ -50,7 +50,7 @@ format:
 	isort src/ tests/ --profile black
 
 run:
-	streamlit run src/ui/streamlit_app.py --server.port $(STREAMLIT_PORT)
+	PYTHONPATH=$(PWD) streamlit run src/ui/streamlit_app.py --server.port $(STREAMLIT_PORT)
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
