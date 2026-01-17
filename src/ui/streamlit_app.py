@@ -526,10 +526,18 @@ def display_search_form():
     )
     airports = [airport_options[a] for a in selected_airports]
 
+    # Transport
+    st.sidebar.subheader("Vervoer")
+    transport_options = ["Vliegtuig", "Auto (eigen vervoer)"]
+    transport = st.sidebar.radio("Hoe wil je reizen?", transport_options, index=0)
+    want_flight = transport == "Vliegtuig"
+
     # Preferences
     st.sidebar.subheader("Voorkeuren")
     accommodation_types = ["Geen voorkeur", "Camping", "Hotel", "Resort", "Appartement"]
-    accommodation = st.sidebar.selectbox("Accommodatie type", accommodation_types, index=1)
+    # Default to Hotel for flights, Camping for car travel
+    default_acc_idx = 2 if want_flight else 1
+    accommodation = st.sidebar.selectbox("Accommodatie type", accommodation_types, index=default_acc_idx)
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
@@ -560,7 +568,8 @@ def display_search_form():
             'budget': budget,
             'airports': airports if airports else ['EIN'],
             'preferences': preferences,
-            'accommodation_type': accommodation if accommodation != "Geen voorkeur" else None
+            'accommodation_type': accommodation if accommodation != "Geen voorkeur" else None,
+            'want_flight': want_flight
         }
 
     return None
@@ -599,7 +608,14 @@ def display_results(results: List[Dict[str, Any]]):
                 st.write(f"**🏕️ Type:** {result.get('accommodation_type', 'Unknown')}")
                 st.write(f"**📅 Vertrek:** {result.get('departure_date', '')}")
                 st.write(f"**⏱️ Duur:** {result.get('duration_nights', '?')} nachten")
-                st.write(f"**✈️ Luchthaven:** {result.get('departure_airport', 'N/A')}")
+
+                # Flight info
+                if result.get('flight_included'):
+                    airport = result.get('departure_airport', 'Zie website')
+                    st.write(f"**✈️ Vlucht:** Inbegrepen (vanaf {airport})")
+                else:
+                    st.write(f"**🚗 Vervoer:** Eigen vervoer (geen vlucht)")
+
                 st.write(f"**🔗 Bron:** {result.get('source_website', 'Unknown')}")
 
                 # Google rating if available
@@ -719,6 +735,28 @@ def main():
             st.session_state.search_results = results
 
             if results:
+                # Filter by flight preference
+                want_flight = query_params.get('want_flight', False)
+                original_count = len(results)
+
+                if want_flight:
+                    # User wants to fly - only show packages with flights included
+                    results = [r for r in results if r.get('flight_included', False)]
+                    filtered_count = original_count - len(results)
+                    if filtered_count > 0:
+                        st.info(f"✈️ {filtered_count} resultaten zonder vlucht gefilterd (je wilt vliegen)")
+                else:
+                    # User drives - exclude results that require flights
+                    results = [r for r in results if not r.get('flight_included', False)]
+                    filtered_count = original_count - len(results)
+                    if filtered_count > 0:
+                        st.info(f"🚗 {filtered_count} vliegreizen gefilterd (je gaat met de auto)")
+
+                if not results:
+                    st.warning("Geen resultaten na filtering. Probeer andere zoekopties.")
+                    st.session_state.is_searching = False
+                    return
+
                 # Rank results using the ranking engine
                 from src.analyzers.requirement_matcher import RequirementMatcher
                 from src.analyzers.ranking_engine import RankingEngine
@@ -770,16 +808,18 @@ def main():
                     result['pros'] = []
                     result['cons'] = []
 
+                    if result.get('flight_included'):
+                        result['pros'].append("✈️ Vlucht inbegrepen")
                     if result.get('has_pool'):
-                        result['pros'].append("Zwembad aanwezig")
+                        result['pros'].append("🏊 Zwembad aanwezig")
                     if result.get('has_water_slides'):
-                        result['pros'].append("Glijbanen beschikbaar")
+                        result['pros'].append("🎢 Glijbanen beschikbaar")
                     if result.get('has_kids_club'):
-                        result['pros'].append("Kinderanimatie/club")
+                        result['pros'].append("👶 Kinderanimatie/club")
                     if result.get('price_total', float('inf')) <= query_params['budget']:
-                        result['pros'].append("Binnen budget")
+                        result['pros'].append("💰 Binnen budget")
                     else:
-                        result['cons'].append("Boven budget")
+                        result['cons'].append("💸 Boven budget")
 
                 # Sort by score
                 results.sort(key=lambda x: x.get('overall_score', 0), reverse=True)

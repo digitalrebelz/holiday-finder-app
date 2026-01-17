@@ -381,6 +381,19 @@ class GoogleReviewsScraper:
             'saai voor tieners', 'boring for teenagers',
         ]
 
+        # Add age-mismatch negatives for older children (11+)
+        if target_age_min >= 10:
+            # Place is mainly for younger kids - not great for teens
+            negative_keywords.extend([
+                'tot 12 jaar', 'tot 10 jaar', 'tot 8 jaar',
+                'kinderen tot', 'children under',
+                'vooral voor kleine kinderen', 'mainly for young children',
+                'peuters en kleuters', 'toddlers',
+                'baby', 'dreumes', 'infant',
+                'kinderopvang', 'creche', 'peuterspeelzaal',
+                'voorzieningen voor jonge kinderen', 'young children facilities',
+            ])
+
         positive_count = 0
         negative_count = 0
         relevant_reviews = []
@@ -450,20 +463,33 @@ class GoogleReviewsScraper:
         elif positive_count == 0 and negative_count == 0:
             score = None  # Cannot determine
 
+        # Check for age mismatch warnings
+        age_mismatch_detected = False
+        young_children_keywords = ['tot 12 jaar', 'tot 10 jaar', 'tot 8 jaar', 'kinderen tot',
+                                   'peuters', 'kleuters', 'voor kleine kinderen']
+        for review in relevant_reviews:
+            if review.get('sentiment') == 'negative':
+                for kw in young_children_keywords:
+                    if kw in review.get('text', '').lower():
+                        age_mismatch_detected = True
+                        break
+
         # Generate detailed summary
         summary_parts = []
 
         if score is None:
             summary = "Geen informatie over kindvriendelijkheid gevonden in reviews"
         else:
-            if score >= 80:
+            if age_mismatch_detected and target_age_min >= 10:
+                summary_parts.append(f"⚠️ LET OP: Vooral geschikt voor jongere kinderen (tot ~12 jaar)")
+            elif score >= 80:
                 summary_parts.append(f"Zeer geschikt voor kinderen van {target_age_min}-{target_age_max} jaar")
             elif score >= 60:
                 summary_parts.append(f"Geschikt voor kinderen")
             elif score >= 40:
                 summary_parts.append(f"Gemengde reviews")
             else:
-                summary_parts.append(f"Mogelijk minder geschikt")
+                summary_parts.append(f"Mogelijk minder geschikt voor {target_age_min}-{target_age_max} jaar")
 
             # Add preference-specific insights
             for pref_name, count in preference_matches.items():
