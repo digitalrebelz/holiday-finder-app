@@ -1,4 +1,6 @@
 """E2E Test Configuration for Playwright."""
+
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -10,6 +12,7 @@ from playwright.sync_api import Page, sync_playwright
 STREAMLIT_PORT = 8502  # Use different port to avoid conflicts
 STREAMLIT_URL = f"http://localhost:{STREAMLIT_PORT}"
 SCREENSHOT_DIR = Path(__file__).parent.parent / "screenshots"
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 @pytest.fixture(scope="session")
@@ -26,17 +29,27 @@ def streamlit_server():
     subprocess.run(["pkill", "-f", "streamlit run"], capture_output=True)
     time.sleep(1)
 
+    # Set up environment with PYTHONPATH
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
     # Start Streamlit server
     process = subprocess.Popen(
         [
-            "streamlit", "run", "src/ui/streamlit_app.py",
-            "--server.port", str(STREAMLIT_PORT),
-            "--server.headless", "true",
-            "--browser.gatherUsageStats", "false"
+            "streamlit",
+            "run",
+            "src/ui/streamlit_app.py",
+            "--server.port",
+            str(STREAMLIT_PORT),
+            "--server.headless",
+            "true",
+            "--browser.gatherUsageStats",
+            "false",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=Path(__file__).parent.parent.parent,
+        cwd=PROJECT_ROOT,
+        env=env,
     )
 
     # Wait for server to start
@@ -46,7 +59,11 @@ def streamlit_server():
 
     # Cleanup
     process.terminate()
-    process.wait(timeout=5)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
     subprocess.run(["pkill", "-f", "streamlit run"], capture_output=True)
 
 

@@ -1,6 +1,6 @@
 # Holiday Finder - Development Progress
 
-## Status: IN PROGRESS
+## Status: COMPLETE
 
 ## Project Location
 `~/Projects/holiday-finder`
@@ -15,16 +15,17 @@
 | 5. UI | COMPLETE | Streamlit, CLI |
 | 6. Unit Tests | COMPLETE | Scrapers, analyzers, database |
 | 7. Integration Tests | COMPLETE | Full search flows |
-| 8. E2E Tests | IN PROGRESS | Playwright click-through tests |
+| 8. E2E Tests | COMPLETE | 24 Playwright click-through tests |
 
 ## Laatste Update
-2026-01-17 - Project verplaatst naar ~/Projects/holiday-finder, toegevoegd:
-- CLAUDE.md met project instructies
-- Makefile voor alle commands
-- pyproject.toml voor tool configuratie
-- requirements-dev.txt
-- E2E test setup met Playwright
-- Screenshot directory voor E2E tests
+2026-01-17 - E2E tests voltooid:
+- 24 E2E tests met Playwright (alle passing)
+- Form interaction tests (sidebar, inputs, checkboxes, sliders)
+- Button click tests (search button, expanders)
+- User flow tests (welcome message, instructions, form filling)
+- UI responsiveness tests (layout, title, sidebar header)
+- Screenshot capture voor elke test actie
+- Development guidelines toegevoegd aan docs/
 
 ---
 
@@ -81,8 +82,12 @@
 - [x] Unit tests voor analyzers
 - [x] Unit tests voor scrapers
 - [x] Integration tests voor full search flow
-- [ ] E2E tests met Playwright
-- [ ] Screenshot tests
+- [x] E2E tests met Playwright (24 tests)
+  - Navigation tests (3 tests)
+  - Form element tests (9 tests)
+  - Button click tests (4 tests)
+  - User flow tests (8 tests)
+- [x] Screenshot capture voor elke UI actie
 
 ---
 
