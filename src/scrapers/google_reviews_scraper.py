@@ -273,15 +273,17 @@ class GoogleReviewsScraper:
         self,
         reviews: List[Dict[str, Any]],
         target_age_min: int = 11,
-        target_age_max: int = 13
+        target_age_max: int = 13,
+        user_preferences: Dict[str, Any] = None
     ) -> Dict[str, Any]:
         """
-        Analyze reviews for child-friendliness based on keywords.
+        Analyze reviews for child-friendliness based on user preferences.
 
         Args:
             reviews: List of review dicts with 'text' field
             target_age_min: Minimum target child age
             target_age_max: Maximum target child age
+            user_preferences: User's search preferences (pool, slides, etc.)
 
         Returns:
             Dict with child_friendliness score and analysis
@@ -292,30 +294,77 @@ class GoogleReviewsScraper:
                 'positive_mentions': 0,
                 'negative_mentions': 0,
                 'relevant_reviews': [],
-                'summary': 'Geen reviews beschikbaar'
+                'summary': 'Geen reviews beschikbaar',
+                'preference_matches': {}
             }
 
-        # Keywords indicating child-friendliness (Dutch + English)
-        positive_keywords = [
-            # Facilities
-            'zwembad', 'pool', 'glijbaan', 'slide', 'waterpark',
-            'speeltuin', 'playground', 'kids club', 'kinderclub',
-            'animatie', 'animation', 'entertainment',
-            # Positive for kids
+        user_preferences = user_preferences or {}
+
+        # Build dynamic keywords based on user preferences
+        positive_keywords = []
+        preference_keywords = {}
+
+        # Core child-friendliness keywords
+        positive_keywords.extend([
             'kindvriendelijk', 'child-friendly', 'gezinsvriendelijk',
             'family-friendly', 'perfect voor kinderen', 'great for kids',
             'kinderen vermaken', 'kids loved', 'kinderen vonden het leuk',
-            'tieners', 'teenagers', 'tiener', 'teenager',
-            # Age specific
-            'pubers', 'adolescents', '10 jaar', '11 jaar', '12 jaar', '13 jaar',
-            '10-jarig', '11-jarig', '12-jarig', '13-jarig',
-            # Activities
-            'activiteiten', 'activities', 'sport', 'sports',
-            'games', 'spellen', 'avontuur', 'adventure',
-        ]
+        ])
+
+        # Age-specific keywords based on target ages
+        if target_age_min >= 10 or target_age_max >= 10:
+            positive_keywords.extend([
+                'tieners', 'teenagers', 'tiener', 'teenager',
+                'pubers', 'adolescents', 'oudere kinderen', 'older kids',
+                'activiteiten voor tieners', 'teen activities',
+            ])
+            # Add specific age mentions
+            for age in range(target_age_min, target_age_max + 1):
+                positive_keywords.extend([f'{age} jaar', f'{age}-jarig', f'{age} year'])
+
+        if target_age_max <= 6:
+            positive_keywords.extend([
+                'peuters', 'kleuters', 'toddlers', 'jonge kinderen',
+                'babyzwembad', 'baby pool', 'peuterbad',
+            ])
+
+        # Add preference-specific keywords
+        if user_preferences.get('pool'):
+            preference_keywords['zwembad'] = [
+                'zwembad', 'pool', 'piscine', 'zwemmen', 'swimming',
+                'groot zwembad', 'mooi zwembad', 'lekker zwembad',
+                'verwarmd zwembad', 'heated pool',
+            ]
+            positive_keywords.extend(preference_keywords['zwembad'])
+
+        if user_preferences.get('water_slides'):
+            preference_keywords['glijbanen'] = [
+                'glijbaan', 'glijbanen', 'slide', 'slides', 'waterpark',
+                'waterglijbaan', 'water slides', 'aquapark',
+                'geweldige glijbanen', 'leuke glijbanen',
+            ]
+            positive_keywords.extend(preference_keywords['glijbanen'])
+
+        if user_preferences.get('kids_club'):
+            preference_keywords['animatie'] = [
+                'animatie', 'animation', 'kinderclub', 'kids club',
+                'entertainment', 'kinderanimatie', 'mini club',
+                'activiteiten voor kinderen', 'programma voor kinderen',
+                'animatieteam', 'entertainment team',
+            ]
+            positive_keywords.extend(preference_keywords['animatie'])
+
+        # Activity keywords relevant for older kids
+        if target_age_max >= 8:
+            positive_keywords.extend([
+                'activiteiten', 'activities', 'sport', 'sports',
+                'voetbal', 'football', 'tennis', 'volleybal',
+                'fietsen', 'cycling', 'kayak', 'surfen',
+                'avontuur', 'adventure', 'games', 'spellen',
+            ])
 
         negative_keywords = [
-            # Not suitable
+            # Not suitable for children
             'niet geschikt voor kinderen', 'not suitable for children',
             'alleen voor volwassenen', 'adults only',
             'geen faciliteiten voor kinderen', 'no kids facilities',
@@ -323,15 +372,19 @@ class GoogleReviewsScraper:
             'niets te doen voor kinderen', 'nothing for kids',
             # Safety concerns
             'gevaarlijk', 'dangerous', 'onveilig', 'unsafe',
-            # Noise/environment
+            # Environment issues
             'te rustig', 'too quiet', 'geen andere kinderen', 'no other children',
             'alleen oudere gasten', 'only older guests',
+            # Age-specific negatives
             'niet geschikt voor tieners', 'not for teenagers',
+            'te kinderachtig', 'too childish', 'voor kleine kinderen',
+            'saai voor tieners', 'boring for teenagers',
         ]
 
         positive_count = 0
         negative_count = 0
         relevant_reviews = []
+        preference_matches = {k: 0 for k in preference_keywords.keys()}
 
         for review in reviews:
             text = review.get('text', '').lower()
@@ -340,6 +393,7 @@ class GoogleReviewsScraper:
 
             is_relevant = False
             sentiment = 'neutral'
+            found_keywords = []
 
             # Check for positive mentions
             pos_found = [kw for kw in positive_keywords if kw in text]
@@ -347,12 +401,19 @@ class GoogleReviewsScraper:
                 positive_count += 1
                 is_relevant = True
                 sentiment = 'positive'
+                found_keywords.extend(pos_found)
+
+                # Track preference-specific matches
+                for pref_name, pref_keywords in preference_keywords.items():
+                    if any(kw in text for kw in pref_keywords):
+                        preference_matches[pref_name] += 1
 
             # Check for negative mentions
             neg_found = [kw for kw in negative_keywords if kw in text]
             if neg_found:
                 negative_count += 1
                 is_relevant = True
+                found_keywords.extend(neg_found)
                 if pos_found:
                     sentiment = 'mixed'
                 else:
@@ -362,34 +423,56 @@ class GoogleReviewsScraper:
                 relevant_reviews.append({
                     'text': review.get('text', '')[:300],
                     'sentiment': sentiment,
-                    'keywords_found': pos_found + neg_found,
+                    'keywords_found': list(set(found_keywords))[:10],
                     'rating': review.get('rating'),
                 })
 
         # Calculate child-friendliness score (0-100)
         total_mentions = positive_count + negative_count
         if total_mentions > 0:
-            score = int((positive_count / total_mentions) * 100)
+            base_score = int((positive_count / total_mentions) * 100)
         else:
-            score = 50  # Neutral if no mentions
+            base_score = 50  # Neutral if no mentions
+
+        # Bonus for preference matches
+        preference_bonus = 0
+        for pref_name, count in preference_matches.items():
+            if count >= 3:
+                preference_bonus += 10
+            elif count >= 1:
+                preference_bonus += 5
+
+        score = min(100, base_score + preference_bonus)
 
         # Adjust score based on number of positive mentions
         if positive_count >= 5:
-            score = min(score + 10, 100)
+            score = min(score + 5, 100)
         elif positive_count == 0 and negative_count == 0:
             score = None  # Cannot determine
 
-        # Generate summary
+        # Generate detailed summary
+        summary_parts = []
+
         if score is None:
             summary = "Geen informatie over kindvriendelijkheid gevonden in reviews"
-        elif score >= 80:
-            summary = f"Zeer kindvriendelijk - {positive_count} positieve vermeldingen"
-        elif score >= 60:
-            summary = f"Kindvriendelijk - {positive_count} positieve, {negative_count} negatieve vermeldingen"
-        elif score >= 40:
-            summary = f"Gemengde reviews over kindvriendelijkheid"
         else:
-            summary = f"Mogelijk minder geschikt voor kinderen - {negative_count} negatieve vermeldingen"
+            if score >= 80:
+                summary_parts.append(f"Zeer geschikt voor kinderen van {target_age_min}-{target_age_max} jaar")
+            elif score >= 60:
+                summary_parts.append(f"Geschikt voor kinderen")
+            elif score >= 40:
+                summary_parts.append(f"Gemengde reviews")
+            else:
+                summary_parts.append(f"Mogelijk minder geschikt")
+
+            # Add preference-specific insights
+            for pref_name, count in preference_matches.items():
+                if count >= 3:
+                    summary_parts.append(f"{pref_name}: vaak positief genoemd")
+                elif count >= 1:
+                    summary_parts.append(f"{pref_name}: genoemd in reviews")
+
+            summary = " | ".join(summary_parts)
 
         return {
             'score': score,
@@ -397,7 +480,8 @@ class GoogleReviewsScraper:
             'negative_mentions': negative_count,
             'relevant_reviews': relevant_reviews[:5],  # Top 5 most relevant
             'summary': summary,
-            'target_age_range': f"{target_age_min}-{target_age_max} jaar"
+            'target_age_range': f"{target_age_min}-{target_age_max} jaar",
+            'preference_matches': preference_matches,
         }
 
 

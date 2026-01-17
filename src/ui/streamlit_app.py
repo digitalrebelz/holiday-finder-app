@@ -363,7 +363,8 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
 async def fetch_reviews_for_results(
     results: List[Dict[str, Any]],
     max_results: int = 5,
-    children_ages: List[int] = None
+    children_ages: List[int] = None,
+    user_preferences: Dict[str, Any] = None
 ) -> List[Dict[str, Any]]:
     """Fetch Google reviews for top results and analyze child-friendliness.
 
@@ -371,6 +372,7 @@ async def fetch_reviews_for_results(
         results: List of travel results
         max_results: Maximum number of results to fetch reviews for
         children_ages: Ages of children for targeted analysis
+        user_preferences: User's search preferences (pool, slides, etc.)
 
     Returns:
         Updated results with review data
@@ -378,6 +380,7 @@ async def fetch_reviews_for_results(
     from src.scrapers.google_reviews_scraper import GoogleReviewsScraper
 
     scraper = GoogleReviewsScraper()
+    user_preferences = user_preferences or {}
 
     # Determine target age range for analysis
     if children_ages:
@@ -386,7 +389,7 @@ async def fetch_reviews_for_results(
             target_min = min(older_kids)
             target_max = max(older_kids)
         else:
-            target_min, target_max = 8, 13
+            target_min, target_max = min(children_ages), max(children_ages)
     else:
         target_min, target_max = 8, 13
 
@@ -415,13 +418,15 @@ async def fetch_reviews_for_results(
                 analysis = await scraper.analyze_child_friendliness(
                     review_data['reviews'],
                     target_age_min=target_min,
-                    target_age_max=target_max
+                    target_age_max=target_max,
+                    user_preferences=user_preferences
                 )
                 result['child_friendliness_score'] = analysis.get('score')
                 result['child_friendliness_summary'] = analysis.get('summary')
                 result['child_relevant_reviews'] = analysis.get('relevant_reviews', [])
                 result['positive_child_mentions'] = analysis.get('positive_mentions', 0)
                 result['negative_child_mentions'] = analysis.get('negative_mentions', 0)
+                result['preference_matches'] = analysis.get('preference_matches', {})
 
         except Exception as e:
             logger.error(f"Failed to fetch reviews for {result.get('accommodation_name')}: {e}")
@@ -762,12 +767,13 @@ def main():
                 results.sort(key=lambda x: x.get('overall_score', 0), reverse=True)
 
                 # Fetch Google reviews for top results
-                st.info("📝 Ophalen van Google Reviews en analyseren kindvriendelijkheid...")
+                st.info("📝 Ophalen van Google Reviews en analyseren kindvriendelijkheid op basis van je wensen...")
                 try:
                     results = asyncio.run(fetch_reviews_for_results(
                         results[:10],
                         max_results=5,  # Fetch reviews for top 5 to save time
-                        children_ages=query_params.get('children_ages')
+                        children_ages=query_params.get('children_ages'),
+                        user_preferences=query_params.get('preferences')
                     ))
                 except Exception as e:
                     logger.error(f"Failed to fetch reviews: {e}")

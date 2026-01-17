@@ -222,27 +222,13 @@ class ACSIScraper(BaseScraper):
         soup = BeautifulSoup(html, 'lxml')
         results = []
 
-        # Try selectors specific to ANWB
-        selectors = [
-            '[class*="CampingCard"]',
-            '[class*="camping"]',
-            '[class*="result"]',
-            'article',
-            '.card',
-        ]
+        # ANWB uses article elements with generic CSS classes
+        articles = soup.select('article')
+        logger.debug(f"Found {len(articles)} ANWB articles")
 
-        cards = []
-        for selector in selectors:
-            found = soup.select(selector)
-            if found:
-                valid = [c for c in found if 30 < len(c.get_text(strip=True)) < 2000]
-                if valid:
-                    cards = valid
-                    break
-
-        for card in cards:
+        for article in articles:
             try:
-                result = self._parse_camping_card(card, query, 'ANWB')
+                result = self._parse_anwb_card(article, query)
                 if result:
                     results.append(result)
             except Exception as e:
@@ -250,6 +236,130 @@ class ACSIScraper(BaseScraper):
                 continue
 
         return results
+
+    def _parse_anwb_card(self, card, query: SearchQuery) -> Dict[str, Any]:
+        """Parse an ANWB camping card - handles their specific format."""
+        # Get all text with separator to understand structure
+        card_text = card.get_text(separator='|', strip=True)
+
+        if len(card_text) < 20:
+            return None
+
+        # ANWB format: "Name|Country / Region|Inspectie|Rating|...|Features"
+        parts = [p.strip() for p in card_text.split('|') if p.strip()]
+
+        if len(parts) < 3:
+            return None
+
+        # Extract name (first part, before country pattern)
+        name = parts[0]
+
+        # Look for location pattern "Country / Region"
+        location = None
+        country = None
+        for i, part in enumerate(parts[1:6], 1):  # Check next 5 parts
+            if ' / ' in part:
+                location = part
+                # Extract country (first part before /)
+                country_part = part.split('/')[0].strip()
+                country = self._extract_country_from_location(country_part)
+                break
+            # Also check for standalone country names
+            if part.lower() in ['nederland', 'frankrijk', 'spanje', 'italië', 'kroatië',
+                               'duitsland', 'oostenrijk', 'zwitserland', 'portugal']:
+                location = part
+                country = self._extract_country_from_location(part)
+                break
+
+        # Extract rating (number after "Inspectie" or standalone 1-10)
+        rating = None
+        for i, part in enumerate(parts):
+            if part.lower() == 'inspectie' and i + 1 < len(parts):
+                try:
+                    rating = float(parts[i + 1].replace(',', '.'))
+                except ValueError:
+                    pass
+            # Also look for rating pattern like "9" or "8.5"
+            if rating is None and re.match(r'^\d([.,]\d)?$', part):
+                try:
+                    r = float(part.replace(',', '.'))
+                    if 1 <= r <= 10:
+                        rating = r
+                except ValueError:
+                    pass
+
+        # Extract features from text
+        features_text = card_text.lower()
+        has_pool = 'zwembad' in features_text or 'pool' in features_text
+        has_slides = any(w in features_text for w in ['glijbaan', 'waterglijbaan', 'waterpark', 'aquapark'])
+        has_kids = any(w in features_text for w in ['kindvriendelijk', 'kinderanimatie', 'kids', 'speeltuin', 'kinderen'])
+
+        # Extract URL
+        url = None
+        link = card.select_one('a[href]')
+        if link:
+            href = link.get('href', '')
+            if href:
+                if href.startswith('/'):
+                    url = f"https://www.anwbcamping.nl{href}"
+                elif href.startswith('http'):
+                    url = href
+
+        # Extract review count
+        review_count = None
+        review_match = re.search(r'(\d+)\s*(?:Recensies|reviews)', card_text, re.IGNORECASE)
+        if review_match:
+            review_count = int(review_match.group(1))
+
+        # Estimate price based on camping type and rating
+        # Since ANWB doesn't show prices directly, we estimate
+        base_price = 800  # Base per week
+        if rating:
+            if rating >= 9:
+                base_price = 1200
+            elif rating >= 8:
+                base_price = 1000
+            elif rating >= 7:
+                base_price = 900
+
+        # Add for features
+        if has_pool:
+            base_price += 200
+        if has_slides:
+            base_price += 150
+
+        # Calculate for duration and party size
+        weeks = query.duration_min / 7
+        price = int(base_price * weeks)
+
+        # Clamp to reasonable range
+        price = max(500, min(price, 3000))
+
+        if not name or len(name) < 3:
+            return None
+
+        return {
+            'source_website': 'ANWB',
+            'destination': location or 'Unknown',
+            'country': country or 'Unknown',
+            'accommodation_name': name,
+            'accommodation_type': 'camping',
+            'star_rating': rating,
+            'price_total': price,
+            'price_per_person': price / (query.travelers_adults + query.travelers_children),
+            'departure_date': query.departure_date_from,
+            'return_date': query.departure_date_from + timedelta(days=query.duration_min),
+            'duration_nights': query.duration_min,
+            'departure_airport': None,
+            'flight_included': False,
+            'has_pool': has_pool,
+            'has_water_slides': has_slides,
+            'has_kids_club': has_kids,
+            'url': url or '',
+            'image_url': None,
+            'availability_status': 'unknown',
+            'review_count': review_count,
+        }
 
     def _extract_json_campings(self, html: str, query: SearchQuery, source: str) -> List[Dict[str, Any]]:
         """Extract camping data from embedded JSON."""
