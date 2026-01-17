@@ -237,6 +237,50 @@ class ACSIScraper(BaseScraper):
 
         return results
 
+    def _detect_accommodation_subtype(self, text: str) -> str:
+        """Detect specific camping accommodation type from text.
+
+        Returns:
+            - 'pitch' for staanplaats/tent spots (NOT flyable)
+            - 'mobile_home' for mobile homes, chalets, bungalows (flyable)
+            - 'safari_tent' for glamping tents (flyable)
+            - 'camping' if unclear
+        """
+        text_lower = text.lower()
+
+        # Rentable accommodations (flyable - user doesn't bring their own)
+        rentable_keywords = [
+            'stacaravan', 'mobile home', 'mobilhome', 'mobil home',
+            'chalet', 'bungalow', 'huisje', 'cottage', 'lodge',
+            'safaritent', 'safari tent', 'glamping', 'lodgetent',
+            'trekkershut', 'cabin', 'huuraccommodatie', 'te huur',
+            'bungalowtent', 'villa', 'appartement',
+        ]
+
+        # Pitch keywords (NOT flyable - user brings own tent/caravan)
+        pitch_keywords = [
+            'staanplaats', 'kampeerplaats', 'pitch', 'tent pitch',
+            'camperplaats', 'caravanplaats', 'eigen tent', 'own tent',
+            'toeristische plaats', 'tourplaats', 'touring pitch',
+        ]
+
+        # Check for rentable first (user can fly there)
+        for kw in rentable_keywords:
+            if kw in text_lower:
+                if 'stacaravan' in text_lower or 'mobile' in text_lower:
+                    return 'mobile_home'
+                elif 'safari' in text_lower or 'glamping' in text_lower or 'lodge' in text_lower:
+                    return 'safari_tent'
+                else:
+                    return 'chalet'
+
+        # Check for pitch (not flyable)
+        for kw in pitch_keywords:
+            if kw in text_lower:
+                return 'pitch'
+
+        return 'camping'  # Unknown/generic
+
     def _parse_anwb_card(self, card, query: SearchQuery) -> Dict[str, Any]:
         """Parse an ANWB camping card - handles their specific format."""
         # Get all text with separator to understand structure
@@ -338,12 +382,18 @@ class ACSIScraper(BaseScraper):
         if not name or len(name) < 3:
             return None
 
+        # Detect accommodation subtype (pitch vs rentable)
+        subtype = self._detect_accommodation_subtype(card_text)
+        is_rentable = subtype in ['mobile_home', 'safari_tent', 'chalet']
+
         return {
             'source_website': 'ANWB',
             'destination': location or 'Unknown',
             'country': country or 'Unknown',
             'accommodation_name': name,
             'accommodation_type': 'camping',
+            'accommodation_subtype': subtype,  # pitch, mobile_home, safari_tent, chalet
+            'is_rentable': is_rentable,  # True if user can fly (doesn't need own tent)
             'star_rating': rating,
             'price_total': price,
             'price_per_person': price / (query.travelers_adults + query.travelers_children),

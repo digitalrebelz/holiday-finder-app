@@ -269,19 +269,19 @@ def generate_demo_results(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
 async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Run actual search across all scrapers.
 
+    For flying users:
+    - Package holidays (with flight) -> use directly
+    - Accommodation only -> search flights separately and combine prices
+
     Args:
         query_params: Search parameters
 
     Returns:
-        List of all results
+        List of all results with correct total prices
     """
-    # Import scrapers only when needed
+    # Import scrapers
     from src.scrapers.camping_scraper import ACSIScraper
     from src.scrapers.corendon_scraper import CorendonScraper
-
-    all_results = []
-
-    # Import all scrapers
     from src.scrapers.booking_scraper import BookingScraper
     from src.scrapers.sunweb_scraper import SunwebScraper
     from src.scrapers.dereizen_scraper import DereizenScraper
@@ -290,20 +290,51 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     from src.scrapers.expedia_scraper import ExpediaScraper
     from src.scrapers.neckermann_scraper import NeckermannScraper
     from src.scrapers.vacansoleil_scraper import VacansoleilScraper
+    from src.scrapers.skyscanner_scraper import SkyscannerScraper
 
-    # All available scrapers (10 sources)
-    scrapers = [
-        ACSIScraper(),  # 1. ANWB camping
-        BookingScraper(),  # 2. Booking.com hotels
-        CorendonScraper(),  # 3. Corendon packages
-        SunwebScraper(),  # 4. Sunweb packages
-        DereizenScraper(),  # 5. D-reizen packages
-        PrijsvrijScraper(),  # 6. Prijsvrij packages
-        VakantieDiscounterScraper(),  # 7. VakantieDiscounter deals
-        ExpediaScraper(),  # 8. Expedia hotels
-        NeckermannScraper(),  # 9. Neckermann packages
-        VacansoleilScraper(),  # 10. Vacansoleil camping
+    want_flight = query_params.get('want_flight', False)
+    accommodation_type = query_params.get('accommodation_type')
+
+    # Categorize scrapers
+    package_scrapers = [  # Include flights
+        CorendonScraper(),
+        SunwebScraper(),
+        DereizenScraper(),
+        PrijsvrijScraper(),
+        VakantieDiscounterScraper(),
+        NeckermannScraper(),
     ]
+
+    accommodation_scrapers = [  # No flights included
+        BookingScraper(),
+        ExpediaScraper(),
+    ]
+
+    camping_scrapers = [  # Campings - need to filter for rentable units
+        ACSIScraper(),
+        VacansoleilScraper(),
+    ]
+
+    # Select scrapers based on preferences
+    scrapers_to_use = []
+
+    if want_flight:
+        # Package holidays always good for flying
+        scrapers_to_use.extend(package_scrapers)
+
+        # Add accommodation scrapers (will need to add flight prices)
+        if accommodation_type != 'Camping':
+            scrapers_to_use.extend(accommodation_scrapers)
+
+        # Add camping scrapers if user wants camping (will filter for rentable)
+        if accommodation_type in ['Camping', None, 'Geen voorkeur']:
+            scrapers_to_use.extend(camping_scrapers)
+    else:
+        # Driving - use all accommodation and camping scrapers
+        scrapers_to_use.extend(accommodation_scrapers)
+        scrapers_to_use.extend(camping_scrapers)
+
+    all_results = []
 
     # Create search query object
     with db_manager.get_session() as session:
@@ -326,31 +357,42 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     st.session_state.search_query_id = query_id
 
+    # Create search query object for scrapers
+    temp_query = SearchQuery(
+        id=query_id,
+        travelers_adults=query_params['adults'],
+        travelers_children=query_params['children'],
+        children_ages=query_params.get('children_ages'),
+        departure_date_from=query_params['date_from'],
+        departure_date_to=query_params['date_to'],
+        duration_min=query_params['duration_min'],
+        duration_max=query_params['duration_max'],
+        budget_max=query_params['budget'],
+        departure_airports=query_params['airports'],
+        preferences=query_params.get('preferences'),
+        accommodation_type=query_params.get('accommodation_type'),
+    )
+
     # Run scrapers
     progress_bar = st.progress(0)
     status_text = st.empty()
+    total_steps = len(scrapers_to_use) + (1 if want_flight else 0)  # +1 for flight search
 
-    for i, scraper in enumerate(scrapers):
+    for i, scraper in enumerate(scrapers_to_use):
         status_text.text(f"Zoeken op {scraper.site.name}...")
         try:
-            # Create a temporary SearchQuery object for the scraper
-            temp_query = SearchQuery(
-                id=query_id,
-                travelers_adults=query_params['adults'],
-                travelers_children=query_params['children'],
-                children_ages=query_params.get('children_ages'),
-                departure_date_from=query_params['date_from'],
-                departure_date_to=query_params['date_to'],
-                duration_min=query_params['duration_min'],
-                duration_max=query_params['duration_max'],
-                budget_max=query_params['budget'],
-                departure_airports=query_params['airports'],
-                preferences=query_params.get('preferences'),
-                accommodation_type=query_params.get('accommodation_type'),
-            )
-
             async with scraper:
                 results = await scraper.search(temp_query)
+
+                # For camping results when flying: filter out pitches (staanplaatsen)
+                if want_flight and scraper.site.name in ['ACSI', 'Vacansoleil']:
+                    original_count = len(results)
+                    results = [r for r in results if r.get('is_rentable', True) or
+                              r.get('accommodation_subtype') not in ['pitch', 'staanplaats']]
+                    filtered = original_count - len(results)
+                    if filtered > 0:
+                        logger.info(f"Filtered {filtered} pitches from {scraper.site.name}")
+
                 all_results.extend(results)
                 logger.info(f"Got {len(results)} results from {scraper.site.name}")
                 if results:
@@ -361,7 +403,95 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
             logger.error(f"Scraper {scraper.site.name} failed: {e}")
             status_text.text(f"✗ {scraper.site.name}: fout ({str(e)[:50]})")
 
-        progress_bar.progress((i + 1) / len(scrapers))
+        progress_bar.progress((i + 1) / total_steps)
+
+    # For flying users: search flights and combine with accommodation prices
+    if want_flight:
+        status_text.text("✈️ Zoeken naar vluchten voor accommodaties zonder vlucht...")
+
+        # Get unique destinations that need flights
+        accommodations_without_flights = [r for r in all_results if not r.get('flight_included', False)]
+
+        if accommodations_without_flights:
+            # Map destinations to airport codes
+            destination_airport_map = {
+                'Spain': 'bcn', 'France': 'mpl', 'Italy': 'fco', 'Croatia': 'spu',
+                'Greece': 'ath', 'Portugal': 'lis', 'Turkey': 'ayt',
+                'Costa Brava': 'bcn', 'Costa Dorada': 'bcn', 'Mallorca': 'pmi',
+                'Toscane': 'psa', 'Gardameer': 'vrn', 'Côte d\'Azur': 'nce',
+                'Languedoc': 'mpl', 'Provence': 'mrs', 'Ardèche': 'mpl',
+            }
+
+            # Group by country/destination to minimize flight searches
+            destinations_to_search = set()
+            for result in accommodations_without_flights:
+                country = result.get('country', '')
+                dest = result.get('destination', '')
+                # Try destination first, then country
+                if dest in destination_airport_map:
+                    destinations_to_search.add((dest, destination_airport_map[dest]))
+                elif country in destination_airport_map:
+                    destinations_to_search.add((country, destination_airport_map[country]))
+
+            # Search flights for each destination
+            flight_prices = {}
+            flight_scraper = SkyscannerScraper()
+
+            try:
+                async with flight_scraper:
+                    for dest_name, dest_code in list(destinations_to_search)[:5]:  # Limit to 5
+                        try:
+                            departure_airport = query_params['airports'][0] if query_params['airports'] else 'EIN'
+                            return_date = query_params['date_from'] + timedelta(days=query_params['duration_min'])
+
+                            flight_result = await flight_scraper.search_flights_to_destination(
+                                departure_airport=departure_airport,
+                                destination_code=dest_code,
+                                departure_date=query_params['date_from'],
+                                return_date=return_date,
+                                adults=query_params['adults'],
+                                children=query_params['children'],
+                                children_ages=query_params.get('children_ages')
+                            )
+
+                            if flight_result.get('found'):
+                                flight_prices[dest_name] = flight_result
+                                logger.info(f"Flight to {dest_name}: €{flight_result['price_total']:.0f} total")
+                        except Exception as e:
+                            logger.warning(f"Flight search to {dest_name} failed: {e}")
+            except Exception as e:
+                logger.error(f"Flight scraper failed: {e}")
+
+            # Add flight prices to accommodation results
+            for result in accommodations_without_flights:
+                country = result.get('country', '')
+                dest = result.get('destination', '')
+
+                flight_info = flight_prices.get(dest) or flight_prices.get(country)
+
+                if flight_info:
+                    # Add flight price to accommodation price
+                    accommodation_price = result.get('price_total', 0)
+                    flight_total = flight_info['price_total']
+                    total_price = accommodation_price + flight_total
+
+                    result['accommodation_price'] = accommodation_price
+                    result['flight_price'] = flight_total
+                    result['flight_price_pp'] = flight_info['price_per_person']
+                    result['price_total'] = total_price
+                    result['price_per_person'] = total_price / (query_params['adults'] + query_params['children'])
+                    result['flight_included'] = True
+                    result['flight_searched'] = True
+                    result['departure_airport'] = flight_info['departure_airport']
+                else:
+                    # No flight found - mark as requiring own flight search
+                    result['flight_included'] = False
+                    result['flight_searched'] = True
+                    result['needs_flight'] = True
+
+            status_text.text(f"✓ Vluchten gevonden voor {len(flight_prices)} bestemmingen")
+
+        progress_bar.progress(1.0)
 
     progress_bar.empty()
     status_text.empty()
@@ -609,10 +739,22 @@ def display_results(results: List[Dict[str, Any]]):
                 st.write(f"**📅 Vertrek:** {result.get('departure_date', '')}")
                 st.write(f"**⏱️ Duur:** {result.get('duration_nights', '?')} nachten")
 
-                # Flight info
-                if result.get('flight_included'):
+                # Flight info with price breakdown
+                if result.get('flight_searched') and result.get('accommodation_price'):
+                    # Combined accommodation + flight
                     airport = result.get('departure_airport', 'Zie website')
-                    st.write(f"**✈️ Vlucht:** Inbegrepen (vanaf {airport})")
+                    acc_price = result.get('accommodation_price', 0)
+                    flight_price = result.get('flight_price', 0)
+                    st.write(f"**✈️ Vlucht:** Ja, vanaf {airport}")
+                    st.write(f"**💰 Prijs opbouw:**")
+                    st.write(f"   Accommodatie: €{acc_price:,.0f}".replace(',', '.'))
+                    st.write(f"   Vlucht (4p): €{flight_price:,.0f}".replace(',', '.'))
+                    st.write(f"   **Totaal: €{result.get('price_total', 0):,.0f}**".replace(',', '.'))
+                elif result.get('flight_included'):
+                    airport = result.get('departure_airport', 'Zie website')
+                    st.write(f"**✈️ Vlucht:** Inbegrepen in pakketprijs (vanaf {airport})")
+                elif result.get('needs_flight'):
+                    st.write(f"**⚠️ Let op:** Geen vlucht gevonden - zelf regelen!")
                 else:
                     st.write(f"**🚗 Vervoer:** Eigen vervoer (geen vlucht)")
 
@@ -728,25 +870,29 @@ def main():
     if query_params:
         st.session_state.is_searching = True
 
+        want_flight = query_params.get('want_flight', False)
+        search_type = "pakketreizen en accommodaties + vluchten" if want_flight else "accommodaties (eigen vervoer)"
+
         # Live scraping
         with st.spinner("Zoeken naar vakanties..."):
-            st.info("🔍 Bezig met zoeken op 10 bronnen: ANWB, Booking, Corendon, Sunweb, D-reizen, Prijsvrij, VakantieDiscounter, Expedia, Neckermann, Vacansoleil. Dit kan 3-5 minuten duren.")
+            st.info(f"🔍 Zoeken naar {search_type}. Dit kan 3-5 minuten duren...")
             results = asyncio.run(run_live_search(query_params))
             st.session_state.search_results = results
 
             if results:
-                # Filter by flight preference
-                want_flight = query_params.get('want_flight', False)
-                original_count = len(results)
-
+                # For flying: results without flight info should be filtered
                 if want_flight:
-                    # User wants to fly - only show packages with flights included
-                    results = [r for r in results if r.get('flight_included', False)]
-                    filtered_count = original_count - len(results)
-                    if filtered_count > 0:
-                        st.info(f"✈️ {filtered_count} resultaten zonder vlucht gefilterd (je wilt vliegen)")
+                    # Keep results that have flights (included or searched)
+                    results_with_flight = [r for r in results if r.get('flight_included', False)]
+                    results_needing_flight = [r for r in results if r.get('needs_flight', False)]
+
+                    if results_needing_flight:
+                        st.warning(f"⚠️ {len(results_needing_flight)} accommodaties gevonden waar geen vlucht voor gevonden kon worden")
+
+                    results = results_with_flight
                 else:
-                    # User drives - exclude results that require flights
+                    # User drives - keep results without flights
+                    original_count = len(results)
                     results = [r for r in results if not r.get('flight_included', False)]
                     filtered_count = original_count - len(results)
                     if filtered_count > 0:

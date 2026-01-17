@@ -53,6 +53,93 @@ class SkyscannerScraper(BaseScraper):
 
         return results
 
+    async def search_flights_to_destination(
+        self,
+        departure_airport: str,
+        destination_code: str,
+        departure_date: date,
+        return_date: date,
+        adults: int,
+        children: int,
+        children_ages: List[int] = None
+    ) -> Dict[str, Any]:
+        """Search for flights to a specific destination.
+
+        Returns cheapest flight option with price per person.
+        """
+        logger.info(f"Searching flights {departure_airport} -> {destination_code}")
+
+        try:
+            outbound = departure_date.strftime('%y%m%d')
+            inbound = return_date.strftime('%y%m%d')
+
+            passengers = f"{adults}adults"
+            if children > 0:
+                passengers += f"-{children}children"
+                if children_ages:
+                    ages = '-'.join(str(age) for age in children_ages)
+                    passengers += f"-{ages}"
+
+            url = f"{self.site.base_url}/transport/vlucht/{departure_airport.lower()}/{destination_code.lower()}/{outbound}/{inbound}/?{passengers}"
+
+            logger.debug(f"Flight search URL: {url}")
+
+            html = await self._fetch_with_browser(
+                url,
+                wait_selector='[class*="price"], [class*="Price"], .BpkText_bpk-text'
+            )
+
+            return self._parse_flight_prices(html, departure_airport, destination_code, adults, children)
+
+        except Exception as e:
+            logger.error(f"Flight search failed: {e}")
+            return {'found': False, 'error': str(e)}
+
+    def _parse_flight_prices(
+        self,
+        html: str,
+        departure_airport: str,
+        destination: str,
+        adults: int,
+        children: int
+    ) -> Dict[str, Any]:
+        """Parse flight prices from Skyscanner results."""
+        import re
+        soup = BeautifulSoup(html, 'lxml')
+
+        # Look for prices in the page
+        prices = []
+
+        # Try various price selectors
+        price_elements = soup.select('[class*="price"], [class*="Price"]')
+        page_text = soup.get_text()
+
+        # Find all euro prices
+        price_matches = re.findall(r'€\s*([\d.,]+)', page_text)
+        for match in price_matches:
+            try:
+                price = self._parse_price(f"€{match}")
+                if price and 20 < price < 2000:  # Reasonable flight price range
+                    prices.append(price)
+            except:
+                continue
+
+        if not prices:
+            return {'found': False, 'destination': destination}
+
+        # Get cheapest price (usually per person)
+        cheapest = min(prices)
+        total_persons = adults + children
+
+        return {
+            'found': True,
+            'destination': destination,
+            'departure_airport': departure_airport,
+            'price_per_person': cheapest,
+            'price_total': cheapest * total_persons,
+            'num_prices_found': len(prices),
+        }
+
     async def check_availability(self, result: TravelResult) -> str:
         """Check availability for a Skyscanner flight.
 
