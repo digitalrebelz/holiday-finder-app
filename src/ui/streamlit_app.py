@@ -282,9 +282,12 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     all_results = []
 
     # Use working scrapers
+    from src.scrapers.booking_scraper import BookingScraper
+
     scrapers = [
-        CorendonScraper(),  # Package holidays with flights
         ACSIScraper(),  # ANWB camping
+        BookingScraper(),  # Booking.com hotels
+        # CorendonScraper(),  # Package holidays (disabled - rate limited)
     ]
 
     # Create search query object
@@ -696,7 +699,7 @@ def main():
 
         # Live scraping
         with st.spinner("Zoeken naar vakanties..."):
-            st.info("🔍 Bezig met zoeken op Corendon (pakketreizen) en ANWB (campings). Dit kan 2-3 minuten duren.")
+            st.info("🔍 Bezig met zoeken op ANWB (campings) en Booking.com (hotels). Dit kan 2-3 minuten duren.")
             results = asyncio.run(run_live_search(query_params))
             st.session_state.search_results = results
 
@@ -806,7 +809,7 @@ def main():
         5. Klik op "Zoek Vakanties"
 
         **Wat de app doet:**
-        - Doorzoekt Corendon (pakketreizen met vlucht) en ANWB (campings)
+        - Doorzoekt ANWB (campings) en Booking.com (hotels)
         - Haalt Google Reviews op voor de top resultaten
         - Analyseert reviews op kindvriendelijkheid (gebaseerd op leeftijden kinderen)
         - Geeft je de top 10 beste matches met scores!

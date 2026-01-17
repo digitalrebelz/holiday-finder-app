@@ -287,7 +287,7 @@ class BaseScraper(ABC):
         """Parse price string to float.
 
         Args:
-            price_str: Price string like '€ 1.234,56' or '1234.56 EUR'
+            price_str: Price string like '€ 1.234,56' or '1234.56 EUR' or '€ 1.950'
 
         Returns:
             Float price value or None if parsing fails
@@ -298,12 +298,31 @@ class BaseScraper(ABC):
         try:
             # Remove currency symbols and whitespace
             cleaned = re.sub(r'[€$EUR\s]', '', price_str)
-            # Handle Dutch format (1.234,56)
+
+            # Handle Dutch format (1.234,56) - dot as thousands, comma as decimal
             if ',' in cleaned and '.' in cleaned:
                 cleaned = cleaned.replace('.', '').replace(',', '.')
             elif ',' in cleaned:
+                # Just comma - treat as decimal separator
                 cleaned = cleaned.replace(',', '.')
-            return float(cleaned)
+            elif '.' in cleaned:
+                # Just dot - check if it's a thousands separator or decimal
+                # If the number after dot is 3 digits, it's likely thousands separator
+                parts = cleaned.split('.')
+                if len(parts) == 2 and len(parts[1]) == 3:
+                    # Likely thousands separator (e.g., "1.950" = 1950)
+                    cleaned = cleaned.replace('.', '')
+                # Otherwise treat as decimal (e.g., "1.95" stays as 1.95)
+
+            price = float(cleaned)
+
+            # Sanity check: vacation prices should typically be > 100
+            # If we got a very small number, it was likely misinterpreted
+            if price < 10:
+                # Try multiplying by 1000 (e.g., 1.95 -> 1950)
+                price = price * 1000
+
+            return price
         except (ValueError, AttributeError):
             logger.warning(f"Could not parse price: {price_str}")
             return None

@@ -37,8 +37,8 @@ class BookingScraper(BaseScraper):
 
         all_results = []
 
-        # Search multiple popular destinations
-        destinations_to_search = self.popular_destinations[:3]  # Limit to 3 to avoid being blocked
+        # Search popular destinations (limit for speed)
+        destinations_to_search = self.popular_destinations[:2]  # Limit to 2 for speed
 
         for dest_name, country_code, region in destinations_to_search:
             try:
