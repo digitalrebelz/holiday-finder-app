@@ -281,13 +281,28 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     all_results = []
 
-    # Use working scrapers
+    # Import all scrapers
     from src.scrapers.booking_scraper import BookingScraper
+    from src.scrapers.sunweb_scraper import SunwebScraper
+    from src.scrapers.dereizen_scraper import DereizenScraper
+    from src.scrapers.prijsvrij_scraper import PrijsvrijScraper
+    from src.scrapers.vakantiediscounter_scraper import VakantieDiscounterScraper
+    from src.scrapers.expedia_scraper import ExpediaScraper
+    from src.scrapers.neckermann_scraper import NeckermannScraper
+    from src.scrapers.vacansoleil_scraper import VacansoleilScraper
 
+    # All available scrapers (10 sources)
     scrapers = [
-        ACSIScraper(),  # ANWB camping
-        BookingScraper(),  # Booking.com hotels
-        # CorendonScraper(),  # Package holidays (disabled - rate limited)
+        ACSIScraper(),  # 1. ANWB camping
+        BookingScraper(),  # 2. Booking.com hotels
+        CorendonScraper(),  # 3. Corendon packages
+        SunwebScraper(),  # 4. Sunweb packages
+        DereizenScraper(),  # 5. D-reizen packages
+        PrijsvrijScraper(),  # 6. Prijsvrij packages
+        VakantieDiscounterScraper(),  # 7. VakantieDiscounter deals
+        ExpediaScraper(),  # 8. Expedia hotels
+        NeckermannScraper(),  # 9. Neckermann packages
+        VacansoleilScraper(),  # 10. Vacansoleil camping
     ]
 
     # Create search query object
@@ -699,7 +714,7 @@ def main():
 
         # Live scraping
         with st.spinner("Zoeken naar vakanties..."):
-            st.info("🔍 Bezig met zoeken op ANWB (campings) en Booking.com (hotels). Dit kan 2-3 minuten duren.")
+            st.info("🔍 Bezig met zoeken op 10 bronnen: ANWB, Booking, Corendon, Sunweb, D-reizen, Prijsvrij, VakantieDiscounter, Expedia, Neckermann, Vacansoleil. Dit kan 3-5 minuten duren.")
             results = asyncio.run(run_live_search(query_params))
             st.session_state.search_results = results
 

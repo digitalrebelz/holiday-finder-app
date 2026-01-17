@@ -62,10 +62,31 @@ DREIZEN = TravelSite(
     requires_javascript=True
 )
 
+NECKERMANN = TravelSite(
+    name="Neckermann",
+    base_url="https://www.neckermann.nl",
+    site_type=SiteType.PACKAGE_HOLIDAY,
+    requires_javascript=True
+)
+
 # Booking Platforms
 BOOKING = TravelSite(
     name="Booking.com",
     base_url="https://www.booking.com",
+    site_type=SiteType.ACCOMMODATION,
+    requires_javascript=True
+)
+
+VAKANTIEDISCOUNTER = TravelSite(
+    name="VakantieDiscounter",
+    base_url="https://www.vakantiediscounter.nl",
+    site_type=SiteType.PACKAGE_HOLIDAY,
+    requires_javascript=True
+)
+
+EXPEDIA = TravelSite(
+    name="Expedia",
+    base_url="https://www.expedia.nl",
     site_type=SiteType.ACCOMMODATION,
     requires_javascript=True
 )
