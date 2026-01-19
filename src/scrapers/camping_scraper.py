@@ -38,22 +38,30 @@ class ACSIScraper(BaseScraper):
 
         all_results = []
 
-        # Try multiple camping sites
-        strategies = [
-            ("Eurocampings", self._search_eurocampings),
-            ("ANWB", self._search_anwb),
-        ]
-
-        for name, search_func in strategies:
+        # Search camping sites in PARALLEL for better performance
+        async def search_with_name(name: str, search_func):
             try:
                 logger.info(f"Trying {name} search...")
                 results = await search_func(query)
                 if results:
                     logger.info(f"Found {len(results)} results from {name}")
-                    all_results.extend(results)
+                return results or []
             except Exception as e:
                 logger.error(f"{name} search failed: {e}")
+                return []
+
+        # Run Eurocampings and ANWB searches in parallel
+        tasks = [
+            search_with_name("Eurocampings", self._search_eurocampings),
+            search_with_name("ANWB", self._search_anwb),
+        ]
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results_lists:
+            if isinstance(result, Exception):
+                logger.error(f"Camping search failed: {result}")
                 continue
+            all_results.extend(result)
 
         # Deduplicate by name
         seen_names = set()
@@ -335,7 +343,16 @@ class ACSIScraper(BaseScraper):
         # Extract features from text
         features_text = card_text.lower()
         has_pool = 'zwembad' in features_text or 'pool' in features_text
-        has_slides = any(w in features_text for w in ['glijbaan', 'waterglijbaan', 'waterpark', 'aquapark'])
+
+        # Distinguish between simple slides and full waterpark
+        has_waterpark = any(w in features_text for w in [
+            'waterpark', 'aquapark', 'aqua park', 'water park',
+            'waterparadijs', 'zwemparadijs', 'waterwereld'
+        ])
+        has_slides = has_waterpark or any(w in features_text for w in [
+            'glijbaan', 'waterglijbaan', 'slide', 'glijbanen'
+        ])
+
         has_kids = any(w in features_text for w in ['kindvriendelijk', 'kinderanimatie', 'kids', 'speeltuin', 'kinderen'])
 
         # Extract URL
@@ -404,6 +421,7 @@ class ACSIScraper(BaseScraper):
             'flight_included': False,
             'has_pool': has_pool,
             'has_water_slides': has_slides,
+            'has_waterpark': has_waterpark,
             'has_kids_club': has_kids,
             'url': url or '',
             'image_url': None,
@@ -618,7 +636,13 @@ class ACSIScraper(BaseScraper):
         # Check facilities from text
         features_text = card.get_text().lower()
         has_pool = any(w in features_text for w in ['zwembad', 'pool', 'piscine'])
-        has_slides = any(w in features_text for w in ['glijbaan', 'slide', 'waterpark', 'waterglijbaan'])
+
+        # Distinguish between simple slides and full waterpark
+        has_waterpark = any(w in features_text for w in [
+            'waterpark', 'aquapark', 'aqua park', 'water park',
+            'waterparadijs', 'zwemparadijs', 'waterwereld'
+        ])
+        has_slides = has_waterpark or any(w in features_text for w in ['glijbaan', 'slide', 'waterglijbaan'])
         has_kids = any(w in features_text for w in ['kinderen', 'kids', 'animatie', 'kinderclub', 'speeltuin'])
 
         # Extract rating
@@ -647,6 +671,7 @@ class ACSIScraper(BaseScraper):
             'flight_included': False,
             'has_pool': has_pool,
             'has_water_slides': has_slides,
+            'has_waterpark': has_waterpark,
             'has_kids_club': has_kids,
             'url': url or '',
             'image_url': image_url,

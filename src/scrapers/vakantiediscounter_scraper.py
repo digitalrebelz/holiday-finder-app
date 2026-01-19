@@ -38,7 +38,8 @@ class VakantieDiscounterScraper(BaseScraper):
             ('turkije', 'Turkey'),
         ]
 
-        for dest_slug, country in destinations[:2]:
+        async def search_destination(dest_slug: str, country: str) -> List[Dict[str, Any]]:
+            """Search a single destination."""
             try:
                 url = f"https://www.vakantiediscounter.nl/{dest_slug}"
 
@@ -51,14 +52,22 @@ class VakantieDiscounterScraper(BaseScraper):
 
                 results = self._parse_results(html, query, country)
                 if results:
-                    logger.info(f"Found {len(results)} results from VakantieDiscounter")
-                    all_results.extend(results)
-
-                await asyncio.sleep(2)
+                    logger.info(f"Found {len(results)} results from VakantieDiscounter for {country}")
+                return results or []
 
             except Exception as e:
-                logger.error(f"VakantieDiscounter search failed: {e}")
+                logger.error(f"VakantieDiscounter search for {country} failed: {e}")
+                return []
+
+        # Search destinations in PARALLEL
+        tasks = [search_destination(dest_slug, country) for dest_slug, country in destinations[:2]]
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results_lists:
+            if isinstance(result, Exception):
+                logger.error(f"VakantieDiscounter destination search failed: {result}")
                 continue
+            all_results.extend(result)
 
         seen = set()
         unique = []

@@ -295,24 +295,24 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     want_flight = query_params.get('want_flight', False)
     accommodation_type = query_params.get('accommodation_type')
 
-    # Categorize scrapers
+    # Categorize scrapers - only fast & reliable ones to prevent timeouts
     package_scrapers = [  # Include flights
         CorendonScraper(),
-        SunwebScraper(),
         DereizenScraper(),
-        PrijsvrijScraper(),
-        VakantieDiscounterScraper(),
-        NeckermannScraper(),
+        # SunwebScraper(),  # Often returns 0 results
+        # PrijsvrijScraper(),  # Too slow
+        # VakantieDiscounterScraper(),  # Too slow (17+ min)
+        # NeckermannScraper(),  # Errors
     ]
 
     accommodation_scrapers = [  # No flights included
         BookingScraper(),
-        ExpediaScraper(),
+        # ExpediaScraper(),  # Slow and often fails
     ]
 
     camping_scrapers = [  # Campings - need to filter for rentable units
         ACSIScraper(),
-        VacansoleilScraper(),
+        # VacansoleilScraper(),  # Slow and few results
     ]
 
     # Select scrapers based on preferences
@@ -373,16 +373,16 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
         accommodation_type=query_params.get('accommodation_type'),
     )
 
-    # Run scrapers
+    # Run scrapers in PARALLEL for better performance
     progress_bar = st.progress(0)
     status_text = st.empty()
-    total_steps = len(scrapers_to_use) + (1 if want_flight else 0)  # +1 for flight search
+    results_container = st.empty()
 
-    for i, scraper in enumerate(scrapers_to_use):
-        status_text.text(f"Zoeken op {scraper.site.name}...")
+    async def run_single_scraper(scraper, query, want_flight):
+        """Run a single scraper and return results."""
         try:
             async with scraper:
-                results = await scraper.search(temp_query)
+                results = await scraper.search(query)
 
                 # For camping results when flying: filter out pitches (staanplaatsen)
                 if want_flight and scraper.site.name in ['ACSI', 'Vacansoleil']:
@@ -393,17 +393,34 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
                     if filtered > 0:
                         logger.info(f"Filtered {filtered} pitches from {scraper.site.name}")
 
-                all_results.extend(results)
                 logger.info(f"Got {len(results)} results from {scraper.site.name}")
-                if results:
-                    status_text.text(f"✓ {scraper.site.name}: {len(results)} resultaten")
-                else:
-                    status_text.text(f"⚠ {scraper.site.name}: geen resultaten")
+                return {'scraper': scraper.site.name, 'results': results, 'error': None}
         except Exception as e:
             logger.error(f"Scraper {scraper.site.name} failed: {e}")
-            status_text.text(f"✗ {scraper.site.name}: fout ({str(e)[:50]})")
+            return {'scraper': scraper.site.name, 'results': [], 'error': str(e)}
 
-        progress_bar.progress((i + 1) / total_steps)
+    status_text.text(f"🚀 Parallel zoeken op {len(scrapers_to_use)} sites...")
+
+    # Run all scrapers in parallel
+    scraper_tasks = [run_single_scraper(scraper, temp_query, want_flight)
+                     for scraper in scrapers_to_use]
+    scraper_results = await asyncio.gather(*scraper_tasks, return_exceptions=True)
+
+    # Process results
+    successful = []
+    failed = []
+    for result in scraper_results:
+        if isinstance(result, Exception):
+            failed.append(f"Error: {result}")
+            continue
+        if result['error']:
+            failed.append(f"{result['scraper']}: {result['error'][:30]}")
+        else:
+            successful.append(f"{result['scraper']}: {len(result['results'])}")
+            all_results.extend(result['results'])
+
+    progress_bar.progress(0.7)
+    status_text.text(f"✓ {len(successful)} sites doorzocht, {len(all_results)} resultaten")
 
     # For flying users: search flights and combine with accommodation prices
     if want_flight:
@@ -524,6 +541,52 @@ async def run_live_search(query_params: Dict[str, Any]) -> List[Dict[str, Any]]:
         if filtered > 0:
             logger.info(f"Filtered {filtered} results outside selected destinations")
 
+    # Add airport distance info to each result
+    from src.scrapers.car_rental_scraper import get_airport_distance
+    for result in all_results:
+        airport_info = get_airport_distance(result.get('destination', ''), result.get('country', ''))
+        if airport_info:
+            result['nearest_airport'] = airport_info['airport']
+            result['airport_distance_km'] = airport_info['distance_km']
+            result['airport_drive_time_min'] = airport_info['drive_time_min']
+
+    # Search for car rental if requested
+    if want_flight and query_params.get('preferences', {}).get('car_rental'):
+        status_text.text("🚗 Zoeken naar huurauto's...")
+        from src.scrapers.car_rental_scraper import CarRentalScraper
+
+        # Get unique countries from results
+        countries = set(r.get('country', '').lower() for r in all_results if r.get('country'))
+
+        car_prices = {}
+        car_scraper = CarRentalScraper()
+
+        try:
+            async with car_scraper:
+                for country in list(countries)[:3]:  # Limit to 3 countries
+                    try:
+                        return_date = query_params['date_from'] + timedelta(days=query_params['duration_min'])
+                        car_result = await car_scraper.search_car_rental(
+                            destination_country=country,
+                            pickup_date=query_params['date_from'],
+                            return_date=return_date,
+                        )
+                        if car_result.get('found'):
+                            car_prices[country] = car_result
+                            logger.info(f"Car rental in {country}: €{car_result['cheapest_price']:.0f}")
+                    except Exception as e:
+                        logger.warning(f"Car rental search for {country} failed: {e}")
+        except Exception as e:
+            logger.error(f"Car rental scraper failed: {e}")
+
+        # Add car rental info to results
+        for result in all_results:
+            country = result.get('country', '').lower()
+            if country in car_prices:
+                result['car_rental'] = car_prices[country]
+
+        status_text.text(f"✓ Huurauto's gevonden voor {len(car_prices)} landen")
+
     # Store results in database
     with db_manager.get_session() as session:
         for result_data in all_results:
@@ -603,6 +666,25 @@ async def fetch_reviews_for_results(
                 result['positive_child_mentions'] = analysis.get('positive_mentions', 0)
                 result['negative_child_mentions'] = analysis.get('negative_mentions', 0)
                 result['preference_matches'] = analysis.get('preference_matches', {})
+
+                # Extract structured pros/cons from reviews
+                pros_cons = scraper.extract_pros_cons_from_reviews(
+                    review_data['reviews'],
+                    user_preferences=user_preferences
+                )
+                if pros_cons.get('pros'):
+                    result['review_pros'] = pros_cons['pros']
+                if pros_cons.get('cons'):
+                    result['review_cons'] = pros_cons['cons']
+
+                # Extract nearby activities
+                ages = list(range(target_min, target_max + 1))
+                activities = scraper.extract_nearby_activities(
+                    review_data['reviews'],
+                    children_ages=ages
+                )
+                if activities:
+                    result['nearby_activities'] = activities
 
         except Exception as e:
             logger.error(f"Failed to fetch reviews for {result.get('accommodation_name')}: {e}")
@@ -723,8 +805,10 @@ def display_search_form():
     with col1:
         all_inclusive = st.checkbox("All inclusive")
         swimming_pool = st.checkbox("Zwembad", value=True)
-    with col2:
         water_slides = st.checkbox("Glijbanen", value=True)
+    with col2:
+        waterpark = st.checkbox("Waterpark", value=False,
+                               help="Groot waterpark met meerdere glijbanen en attracties")
         if kids_club_relevant:
             kids_club = st.checkbox("Kinderanimatie", value=True)
         else:
@@ -732,12 +816,19 @@ def display_search_form():
                                    help="Kinderanimatie is vooral voor kinderen t/m 10 jaar")
             st.caption("(niet relevant voor 11+ jaar)")
 
+    # Car rental option
+    st.sidebar.subheader("Extra's")
+    want_car_rental = st.checkbox("🚗 Zoek huurauto", value=False,
+                                  help="Zoek huurauto's op het vliegveld van bestemming")
+
     # Build preferences dict
     preferences = {
         'all_inclusive': all_inclusive,
         'pool': swimming_pool,
         'water_slides': water_slides,
-        'kids_club': kids_club
+        'waterpark': waterpark,
+        'kids_club': kids_club,
+        'car_rental': want_car_rental,
     }
 
     # Search button
@@ -835,7 +926,9 @@ def display_results(results: List[Dict[str, Any]]):
                 facilities = []
                 if result.get('has_pool'):
                     facilities.append("🏊 Zwembad")
-                if result.get('has_water_slides'):
+                if result.get('has_waterpark'):
+                    facilities.append("🌊 Waterpark")
+                elif result.get('has_water_slides'):
                     facilities.append("🎢 Glijbanen")
                 if result.get('has_kids_club'):
                     facilities.append("👶 Kinderclub")
@@ -848,6 +941,14 @@ def display_results(results: List[Dict[str, Any]]):
                     st.write("**Faciliteiten:**")
                     st.write(" | ".join(facilities))
 
+                # Airport distance info
+                if result.get('airport_distance_km'):
+                    airport = result.get('nearest_airport', '?')
+                    distance = result.get('airport_distance_km', 0)
+                    drive_time = result.get('airport_drive_time_min', 0)
+                    st.write("**🛬 Afstand vliegveld:**")
+                    st.write(f"{airport}: {distance} km ({drive_time} min rijden)")
+
             with col3:
                 st.write(f"**Prijs totaal:**")
                 st.markdown(f"### €{result.get('price_total', 0):,.0f}".replace(',', '.'))
@@ -858,6 +959,55 @@ def display_results(results: List[Dict[str, Any]]):
 
                 if result.get('url'):
                     st.link_button("Bekijk →", result['url'])
+
+            # Car rental info
+            if result.get('car_rental'):
+                car = result['car_rental']
+                st.write("---")
+                st.write("**🚗 Huurauto vergelijking:**")
+
+                # Show providers compared
+                providers = car.get('providers_compared', [])
+                if providers and not car.get('estimated'):
+                    best = car.get('best_provider', providers[0])
+                    st.write(f"🔍 Vergeleken: {', '.join(providers)} | 🏆 Beste prijs: **{best}**")
+
+                car_cols = st.columns([1, 2, 1])
+                with car_cols[0]:
+                    st.write(f"📍 **{car.get('airport_name', 'Vliegveld')}**")
+                    st.write(f"({car.get('airport_code', '')})")
+                    st.write(f"📅 {car.get('duration_days', '?')} dagen")
+
+                with car_cols[1]:
+                    if car.get('estimated'):
+                        st.caption("*Geschatte prijzen (geen live data)*")
+
+                    # Show category prices
+                    categories = car.get('car_categories', [])[:4]
+                    cat_cols = st.columns(len(categories))
+                    for idx, cat in enumerate(categories):
+                        with cat_cols[idx]:
+                            price = cat.get('estimated_price', 0)
+                            st.write(f"**{cat['category']}**")
+                            st.write(f"€{price:,.0f}".replace(',', '.'))
+                            if cat.get('best_at'):
+                                st.caption(f"via {cat['best_at']}")
+
+                with car_cols[2]:
+                    cheapest = car.get('cheapest_price', 0)
+                    st.metric("Vanaf", f"€{cheapest:,.0f}".replace(',', '.'))
+                    st.write(f"€{car.get('price_per_day', 0):.0f}/dag")
+
+                # Show per-provider prices if available
+                provider_prices = car.get('provider_prices', {})
+                if provider_prices and len(provider_prices) > 1:
+                    with st.expander("📊 Prijzen per aanbieder", expanded=False):
+                        price_cols = st.columns(len(provider_prices))
+                        for idx, (provider, info) in enumerate(provider_prices.items()):
+                            with price_cols[idx]:
+                                st.write(f"**{provider}**")
+                                st.write(f"€{info['cheapest']:,.0f}".replace(',', '.'))
+                                st.caption(f"€{info['price_per_day']:.0f}/dag")
 
             # Child-friendliness analysis
             if result.get('child_friendliness_summary'):
@@ -896,16 +1046,52 @@ def display_results(results: List[Dict[str, Any]]):
             col_pros, col_cons = st.columns(2)
 
             with col_pros:
-                if result.get('pros'):
+                # Combine basic pros with review-based pros
+                all_pros = result.get('pros', [])[:]
+                review_pros = result.get('review_pros', [])
+                for pro in review_pros:
+                    if pro not in all_pros:
+                        all_pros.append(pro)
+
+                if all_pros:
                     st.write("**👍 Voordelen:**")
-                    for pro in result['pros'][:3]:
+                    for pro in all_pros[:5]:
                         st.write(f"✅ {pro}")
 
             with col_cons:
-                if result.get('cons'):
+                # Combine basic cons with review-based cons
+                all_cons = result.get('cons', [])[:]
+                review_cons = result.get('review_cons', [])
+                for con in review_cons:
+                    if con not in all_cons:
+                        all_cons.append(con)
+
+                if all_cons:
                     st.write("**⚠️ Aandachtspunten:**")
-                    for con in result['cons'][:2]:
+                    for con in all_cons[:4]:
                         st.write(f"⚠️ {con}")
+
+            # Nearby activities
+            activities = result.get('nearby_activities', [])
+            if activities:
+                st.write("---")
+                st.write("**🎯 Activiteiten in de omgeving (uit reviews):**")
+                activity_icons = {
+                    'pretpark': '🎢', 'dierentuin': '🦁', 'aquarium': '🐠',
+                    'fietsen': '🚴', 'wandelen': '🥾', 'watersport': '🚣',
+                    'sport': '⚽', 'golf': '⛳', 'paardrijden': '🐴',
+                    'klimmen': '🧗', 'avontuur': '🎿', 'strand': '🏖️',
+                    'duiken': '🤿', 'bootje': '⛵', 'uitstapje': '🗺️',
+                    'markt': '🛍️', 'centrum': '🏘️', 'cultuur': '🏰',
+                    'entertainment': '🎮', 'karten': '🏎️',
+                }
+                cols = st.columns(4)
+                for i, activity in enumerate(activities[:8]):
+                    col_idx = i % 4
+                    icon = activity_icons.get(activity['type'], '📍')
+                    sentiment_icon = '👍' if activity['sentiment'] == 'positive' else ''
+                    with cols[col_idx]:
+                        st.write(f"{icon} {activity['name']} {sentiment_icon}")
 
 
 def main():
@@ -981,6 +1167,20 @@ def main():
                     st.session_state.is_searching = False
                     return
 
+                # Filter by waterpark if specifically requested
+                prefs = query_params.get('preferences', {})
+                if prefs.get('waterpark'):
+                    waterpark_results = [r for r in results if r.get('has_waterpark', False)]
+                    if waterpark_results:
+                        non_waterpark = len(results) - len(waterpark_results)
+                        results = waterpark_results
+                        if non_waterpark > 0:
+                            st.info(f"🌊 {non_waterpark} accommodaties zonder waterpark gefilterd")
+                    else:
+                        st.warning("Geen accommodaties met waterpark gevonden. Tonen van resultaten met glijbanen.")
+                        # Fall back to water slides
+                        results = [r for r in results if r.get('has_water_slides', False)]
+
                 # Rank results using the ranking engine
                 from src.analyzers.requirement_matcher import RequirementMatcher
                 from src.analyzers.ranking_engine import RankingEngine
@@ -1036,7 +1236,9 @@ def main():
                         result['pros'].append("✈️ Vlucht inbegrepen")
                     if result.get('has_pool'):
                         result['pros'].append("🏊 Zwembad aanwezig")
-                    if result.get('has_water_slides'):
+                    if result.get('has_waterpark'):
+                        result['pros'].append("🌊 Waterpark aanwezig")
+                    elif result.get('has_water_slides'):
                         result['pros'].append("🎢 Glijbanen beschikbaar")
                     if result.get('has_kids_club'):
                         result['pros'].append("👶 Kinderanimatie/club")

@@ -17,6 +17,17 @@ from src.config.settings import settings
 from src.config.travel_sites import TravelSite
 from src.database.models import SearchQuery, TravelResult
 
+# Global semaphore to limit concurrent browser instances (prevents crashes)
+MAX_CONCURRENT_BROWSERS = 6
+_browser_semaphore = None
+
+def _get_browser_semaphore():
+    """Get or create the browser semaphore (must be called within async context)."""
+    global _browser_semaphore
+    if _browser_semaphore is None:
+        _browser_semaphore = asyncio.Semaphore(MAX_CONCURRENT_BROWSERS)
+    return _browser_semaphore
+
 
 class BaseScraper(ABC):
     """Abstract base class for travel site scrapers."""
@@ -33,6 +44,7 @@ class BaseScraper(ABC):
         self.user_agent = settings.scraping.user_agent
         self._browser: Optional[Browser] = None
         self._playwright = None
+        self._holds_semaphore = False
 
     @abstractmethod
     async def search(self, query: SearchQuery) -> List[Dict[str, Any]]:
@@ -73,10 +85,17 @@ class BaseScraper(ABC):
     async def _setup_browser(self) -> Browser:
         """Set up Playwright browser for JavaScript-heavy sites.
 
+        Uses a global semaphore to limit concurrent browser instances.
+
         Returns:
             Playwright Browser instance
         """
         if self._browser is None:
+            # Wait for semaphore to limit concurrent browsers
+            semaphore = _get_browser_semaphore()
+            await semaphore.acquire()
+            self._holds_semaphore = True
+
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
                 headless=True,
@@ -97,13 +116,18 @@ class BaseScraper(ABC):
         return self._browser
 
     async def _close_browser(self):
-        """Close the browser instance."""
+        """Close the browser instance and release semaphore."""
         if self._browser:
             await self._browser.close()
             self._browser = None
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
+        # Release semaphore if we hold it
+        if getattr(self, '_holds_semaphore', False):
+            semaphore = _get_browser_semaphore()
+            semaphore.release()
+            self._holds_semaphore = False
 
     async def _get_page(self) -> Page:
         """Get a new browser page with anti-detection measures.

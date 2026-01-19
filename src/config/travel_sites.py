@@ -12,6 +12,7 @@ class SiteType(Enum):
     ACCOMMODATION = "accommodation"
     CAMPING = "camping"
     REVIEWS = "reviews"
+    CAR_RENTAL = "car_rental"
 
 
 @dataclass

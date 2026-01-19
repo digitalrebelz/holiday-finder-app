@@ -339,11 +339,20 @@ class GoogleReviewsScraper:
 
         if user_preferences.get('water_slides'):
             preference_keywords['glijbanen'] = [
-                'glijbaan', 'glijbanen', 'slide', 'slides', 'waterpark',
-                'waterglijbaan', 'water slides', 'aquapark',
+                'glijbaan', 'glijbanen', 'slide', 'slides',
+                'waterglijbaan', 'water slides',
                 'geweldige glijbanen', 'leuke glijbanen',
             ]
             positive_keywords.extend(preference_keywords['glijbanen'])
+
+        if user_preferences.get('waterpark'):
+            preference_keywords['waterpark'] = [
+                'waterpark', 'aquapark', 'water park', 'aqua park',
+                'zwemparadijs', 'waterparadijs', 'waterattracties',
+                'groot waterpark', 'mooi waterpark', 'spectaculair waterpark',
+                'wave pool', 'lazy river', 'wildwaterbaan',
+            ]
+            positive_keywords.extend(preference_keywords['waterpark'])
 
         if user_preferences.get('kids_club'):
             preference_keywords['animatie'] = [
@@ -509,6 +518,215 @@ class GoogleReviewsScraper:
             'target_age_range': f"{target_age_min}-{target_age_max} jaar",
             'preference_matches': preference_matches,
         }
+
+
+    def extract_pros_cons_from_reviews(
+        self,
+        reviews: List[Dict[str, Any]],
+        user_preferences: Dict[str, Any] = None
+    ) -> Dict[str, List[str]]:
+        """
+        Extract structured pros and cons from reviews that match user preferences.
+
+        Returns:
+            Dict with 'pros' and 'cons' lists of unique findings
+        """
+        user_preferences = user_preferences or {}
+        pros = []
+        cons = []
+
+        # Define what to look for based on preferences
+        criteria_patterns = {
+            'pool': {
+                'positive': [
+                    (r'zwembad[en]?\s+(?:is|was|zijn)\s+(?:prachtig|geweldig|mooi|super|lekker|heerlijk|schoon)', 'Prachtig zwembad'),
+                    (r'groot\s+zwembad', 'Groot zwembad aanwezig'),
+                    (r'meerdere\s+zwembaden', 'Meerdere zwembaden'),
+                    (r'verwarmd\s+zwembad', 'Verwarmd zwembad'),
+                    (r'zwembad.{0,30}schoon', 'Schoon zwembad'),
+                ],
+                'negative': [
+                    (r'zwembad.{0,30}(?:klein|druk|vies|koud)', 'Zwembad kan druk/klein zijn'),
+                    (r'geen\s+zwembad', 'Geen zwembad'),
+                ],
+            },
+            'water_slides': {
+                'positive': [
+                    (r'glijbanen?.{0,30}(?:leuk|geweldig|super|fantastisch)', 'Leuke glijbanen'),
+                    (r'veel\s+glijbanen', 'Veel glijbanen'),
+                    (r'lange\s+glijbanen?', 'Lange glijbanen'),
+                ],
+                'negative': [
+                    (r'glijbanen?.{0,30}(?:klein|beperkt|wachtrij)', 'Glijbanen kunnen druk zijn'),
+                ],
+            },
+            'waterpark': {
+                'positive': [
+                    (r'waterpark.{0,30}(?:geweldig|super|spectaculair|groot)', 'Spectaculair waterpark'),
+                    (r'aquapark.{0,30}(?:leuk|mooi|groot)', 'Mooi aquapark'),
+                ],
+                'negative': [
+                    (r'waterpark.{0,30}(?:teleurstellend|klein|duur)', 'Waterpark kan tegenvallen'),
+                ],
+            },
+            'kids_club': {
+                'positive': [
+                    (r'animatie.{0,30}(?:geweldig|super|leuk|goed)', 'Goede animatie'),
+                    (r'kinderclub.{0,30}(?:leuk|goed|fijn)', 'Leuke kinderclub'),
+                    (r'kinderen.{0,30}(?:vermaakten|vermaakt|vermaken)', 'Kinderen goed vermaakt'),
+                ],
+                'negative': [
+                    (r'animatie.{0,30}(?:slecht|beperkt|matig)', 'Animatie kan beter'),
+                    (r'geen\s+(?:animatie|kinderclub)', 'Beperkte kinderactiviteiten'),
+                ],
+            },
+        }
+
+        # General patterns not tied to preferences
+        general_patterns = {
+            'positive': [
+                (r'schoon\s+(?:en\s+)?netjes', 'Schoon en netjes'),
+                (r'vriendelijk\s+personeel', 'Vriendelijk personeel'),
+                (r'goede\s+(?:ligging|locatie)', 'Goede locatie'),
+                (r'strand.{0,20}(?:dichtbij|op loopafstand|nabij)', 'Dicht bij strand'),
+                (r'(?:restaurant|eten).{0,30}(?:goed|lekker|prima)', 'Goed restaurant/eten'),
+                (r'ruime\s+(?:plek|accommodatie|staanplaats)', 'Ruime accommodatie'),
+                (r'(?:prijs|prijskwaliteit).{0,20}(?:goed|prima|uitstekend)', 'Goede prijs/kwaliteit'),
+            ],
+            'negative': [
+                (r'(?:druk|vol).{0,20}hoogseizoen', 'Kan druk zijn in hoogseizoen'),
+                (r'(?:geluidsoverlast|lawaai)', 'Kan geluidsoverlast zijn'),
+                (r'(?:wc|sanitair).{0,30}(?:vies|slecht|oud)', 'Sanitair kan beter'),
+                (r'lang\s+(?:wacht|lopen)', 'Lange loopafstanden of wachttijden'),
+                (r'(?:duur|prijzig)', 'Kan prijzig zijn'),
+                (r'(?:muggen|insecten)', 'Let op muggen/insecten'),
+            ],
+        }
+
+        seen_pros = set()
+        seen_cons = set()
+
+        for review in reviews:
+            text = review.get('text', '').lower()
+            if not text or len(text) < 20:
+                continue
+
+            # Check preference-based patterns
+            for pref_name, patterns in criteria_patterns.items():
+                if user_preferences.get(pref_name, False):
+                    for pattern, finding in patterns['positive']:
+                        if re.search(pattern, text) and finding not in seen_pros:
+                            pros.append(finding)
+                            seen_pros.add(finding)
+                    for pattern, finding in patterns['negative']:
+                        if re.search(pattern, text) and finding not in seen_cons:
+                            cons.append(finding)
+                            seen_cons.add(finding)
+
+            # Check general patterns
+            for pattern, finding in general_patterns['positive']:
+                if re.search(pattern, text) and finding not in seen_pros:
+                    pros.append(finding)
+                    seen_pros.add(finding)
+            for pattern, finding in general_patterns['negative']:
+                if re.search(pattern, text) and finding not in seen_cons:
+                    cons.append(finding)
+                    seen_cons.add(finding)
+
+        return {
+            'pros': pros[:6],  # Limit to top 6
+            'cons': cons[:4],  # Limit to top 4
+        }
+
+    def extract_nearby_activities(
+        self,
+        reviews: List[Dict[str, Any]],
+        children_ages: List[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract nearby activities and attractions mentioned in reviews.
+
+        Returns:
+            List of activities with name, type, and sentiment
+        """
+        children_ages = children_ages or [10]
+        activities = []
+        seen_activities = set()
+
+        # Activity patterns with categories
+        activity_patterns = [
+            # Theme parks / attractions
+            (r'pretpark[en]?\s*(?:in de buurt|dichtbij|vlakbij)?', 'pretpark', 'Pretpark'),
+            (r'(?:dierentuin|zoo|wildpark)\s*(?:in de buurt|dichtbij)?', 'dierentuin', 'Dierentuin'),
+            (r'aquarium', 'aquarium', 'Aquarium'),
+
+            # Sports / outdoor
+            (r'(?:fietsen|mountainbiken|fiets\s*huren)\s*(?:in de buurt|mogelijk)?', 'fietsen', 'Fietsen/Mountainbiken'),
+            (r'(?:wandelen|wandelroutes|hiking)', 'wandelen', 'Wandelen/Hiking'),
+            (r'(?:kayak|kanoën|suppen|watersporten)', 'watersport', 'Watersport (kayak/SUP)'),
+            (r'(?:tennis|voetbal|sport\s*velden)', 'sport', 'Sportvelden'),
+            (r'(?:minigolf|midgetgolf|golf)', 'golf', 'Minigolf/Golf'),
+            (r'(?:paardrijden|manege)', 'paardrijden', 'Paardrijden'),
+            (r'(?:klimmen|klim\s*wand|klimbos|accrobranche)', 'klimmen', 'Klimmen/Klimbos'),
+            (r'(?:zipline|tokkelbaan)', 'avontuur', 'Zipline/Tokkelbaan'),
+
+            # Beach / water
+            (r'strand\s*(?:op loopafstand|dichtbij|mooi)', 'strand', 'Strand dichtbij'),
+            (r'(?:snorkelen|duiken)', 'duiken', 'Snorkelen/Duiken'),
+            (r'(?:bootverhuur|boot\s*tochtje)', 'bootje', 'Bootverhuur'),
+
+            # Cultural / sightseeing
+            (r'(?:uitstapje|dagje\s*(?:naar|uit)|bezoek)\s*(?:aan)?\s*([A-Z][a-zA-Z\s]+)?', 'uitstapje', 'Uitstapjes mogelijk'),
+            (r'(?:markt|weekmarkt)', 'markt', 'Markt in de buurt'),
+            (r'(?:stad|dorp|centrum)\s*(?:dichtbij|op loopafstand)', 'centrum', 'Centrum/Dorp dichtbij'),
+            (r'(?:kasteel|ruine|historisch)', 'cultuur', 'Culturele bezienswaardigheden'),
+
+            # Entertainment
+            (r'(?:bioscoop|cinema)', 'entertainment', 'Bioscoop'),
+            (r'(?:bowling|laser\s*game|escape\s*room)', 'entertainment', 'Indoor entertainment'),
+            (r'(?:go-?kart|kartbaan)', 'karten', 'Kartbaan'),
+        ]
+
+        # Age-appropriate filtering
+        teen_activities = ['klimmen', 'avontuur', 'watersport', 'karten', 'entertainment']
+        young_kid_activities = ['dierentuin', 'strand', 'pretpark', 'minigolf']
+
+        for review in reviews:
+            text = review.get('text', '').lower()
+            if not text:
+                continue
+
+            for pattern, activity_type, activity_name in activity_patterns:
+                if re.search(pattern, text):
+                    if activity_name not in seen_activities:
+                        # Check if activity is age-appropriate
+                        is_appropriate = True
+                        if children_ages:
+                            max_age = max(children_ages)
+                            min_age = min(children_ages)
+                            # Filter out young kid activities for teens
+                            if max_age >= 12 and activity_type in young_kid_activities:
+                                is_appropriate = False
+                            # Include teen activities for older kids
+                            if min_age >= 8 and activity_type in teen_activities:
+                                is_appropriate = True
+
+                        if is_appropriate:
+                            # Determine sentiment from context
+                            sentiment = 'neutral'
+                            if any(pos in text for pos in ['leuk', 'mooi', 'geweldig', 'aanrader', 'super']):
+                                sentiment = 'positive'
+                            elif any(neg in text for neg in ['slecht', 'teleurstellend', 'niet de moeite']):
+                                sentiment = 'negative'
+
+                            activities.append({
+                                'name': activity_name,
+                                'type': activity_type,
+                                'sentiment': sentiment,
+                            })
+                            seen_activities.add(activity_name)
+
+        return activities[:8]  # Limit to 8 activities
 
 
 async def test_google_reviews():

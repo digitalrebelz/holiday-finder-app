@@ -91,6 +91,7 @@ class TravelResult(Base):
     # Facilities
     has_pool = Column(Boolean, nullable=True)
     has_water_slides = Column(Boolean, nullable=True)
+    has_waterpark = Column(Boolean, nullable=True)
     has_kids_club = Column(Boolean, nullable=True)
     has_animation = Column(Boolean, nullable=True)
 

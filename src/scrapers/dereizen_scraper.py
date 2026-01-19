@@ -39,7 +39,8 @@ class DereizenScraper(BaseScraper):
             ('turkije', 'Turkey'),
         ]
 
-        for dest_slug, country in destinations[:2]:
+        async def search_destination(dest_slug: str, country: str) -> List[Dict[str, Any]]:
+            """Search a single destination."""
             try:
                 date_str = query.departure_date_from.strftime('%d-%m-%Y')
                 url = (
@@ -59,13 +60,21 @@ class DereizenScraper(BaseScraper):
                 results = self._parse_results(html, query, country)
                 if results:
                     logger.info(f"Found {len(results)} results from D-reizen for {country}")
-                    all_results.extend(results)
-
-                await asyncio.sleep(2)
+                return results or []
 
             except Exception as e:
                 logger.error(f"D-reizen search for {country} failed: {e}")
+                return []
+
+        # Search destinations in PARALLEL
+        tasks = [search_destination(dest_slug, country) for dest_slug, country in destinations[:2]]
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results_lists:
+            if isinstance(result, Exception):
+                logger.error(f"D-reizen destination search failed: {result}")
                 continue
+            all_results.extend(result)
 
         seen = set()
         unique = []

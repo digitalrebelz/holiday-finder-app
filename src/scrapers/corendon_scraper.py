@@ -46,8 +46,8 @@ class CorendonScraper(BaseScraper):
 
         all_results = []
 
-        # Search multiple destinations
-        for dest_slug, country in self.destinations[:3]:  # Limit to 3 to be faster
+        async def search_destination(dest_slug: str, country: str) -> List[Dict[str, Any]]:
+            """Search a single destination."""
             try:
                 logger.info(f"Searching Corendon for {country}...")
                 url = f"{self.site.base_url}/{dest_slug}"
@@ -60,14 +60,22 @@ class CorendonScraper(BaseScraper):
                 results = self._parse_results(html, query, country)
                 if results:
                     logger.info(f"Found {len(results)} results from Corendon for {country}")
-                    all_results.extend(results)
-
-                # Rate limit
-                await asyncio.sleep(2)
+                return results or []
 
             except Exception as e:
                 logger.error(f"Corendon search for {country} failed: {e}")
+                return []
+
+        # Search destinations in PARALLEL
+        tasks = [search_destination(dest_slug, country)
+                 for dest_slug, country in self.destinations[:3]]
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for result in results_lists:
+            if isinstance(result, Exception):
+                logger.error(f"Corendon destination search failed: {result}")
                 continue
+            all_results.extend(result)
 
         # Deduplicate
         seen = set()
@@ -206,6 +214,13 @@ class CorendonScraper(BaseScraper):
         all_inclusive = 'all inclusive' in text_lower
         has_kids = 'kinder' in text_lower or 'kids' in text_lower or 'familie' in text_lower
 
+        # Distinguish waterpark from simple slides
+        has_waterpark = any(w in text_lower for w in [
+            'waterpark', 'aquapark', 'aqua park', 'water park',
+            'waterparadijs', 'zwemparadijs'
+        ])
+        has_slides = has_waterpark or 'glijbaan' in text_lower or 'slide' in text_lower
+
         # Determine accommodation type
         acc_type = 'hotel'
         if 'appartement' in text_lower or 'apartment' in text_lower:
@@ -236,7 +251,8 @@ class CorendonScraper(BaseScraper):
             'transfer_included': 'transfer' in text_lower,
             'all_inclusive': all_inclusive,
             'has_pool': has_pool,
-            'has_water_slides': 'glijbaan' in text_lower or 'slide' in text_lower,
+            'has_water_slides': has_slides,
+            'has_waterpark': has_waterpark,
             'has_kids_club': has_kids,
             'url': url or '',
             'image_url': image_url,
